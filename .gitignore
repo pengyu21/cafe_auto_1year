@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Credentials and sensitive files
+service_account.json
+comment_config.json
+presets.json
+
+# Local profiles and cache
+chrome_profiles/
+
+# Logs and runtime files
+*.log
+log.txt
+comment_log.txt
+checkpoint_*.txt
+
+# Virtual Environments
+venv/
+env/
+.env
+
+# OS Output
+.DS_Store
+Thumbs.db
