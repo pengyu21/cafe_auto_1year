@@ -144,6 +144,16 @@ class NaverCafeBot:
             pw_input.send_keys(Keys.CONTROL, 'v')
             time.sleep(1)
 
+            # 로그인 상태 유지 체크 (브라우저 종료 후에도 세션 유지)
+            try:
+                keep_checkbox = self.driver.find_element(By.ID, "keep")
+                if not keep_checkbox.is_selected():
+                    # 커스텀 체크박스 UI이므로 label을 클릭하여 활성화
+                    self.driver.find_element(By.XPATH, "//label[@for='keep']").click()
+                    time.sleep(0.5)
+            except Exception as e:
+                print(f"로그인 상태 유지 체크박스 처리 실패 (무시됨): {e}")
+
             # 로그인 버튼 클릭
             self.driver.find_element(By.ID, "log.login").click()
             time.sleep(3)

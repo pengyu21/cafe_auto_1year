@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QProgressBar, QSystemTrayIcon, QMenu, QDialog,
     QCalendarWidget, QSpinBox, QTimeEdit, QDateEdit, QDateTimeEdit,
     QSplitter, QFrame, QLineEdit, QScrollArea, QAbstractItemView, QTextEdit, # [추가] QTextEdit
-    QSizePolicy # [추가] QSizePolicy
+    QSizePolicy, QGridLayout # [추가] QSizePolicy, QGridLayout
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QTime, QDate, QDateTime, QSize, QObject # [추가] QObject
 from PySide6.QtGui import QIcon, QFont, QAction, QColor, QDesktopServices, QIntValidator, QPalette # [추가] QPalette
@@ -290,6 +290,195 @@ class DatePickerDialog(QDialog):
         t_str = f"{self.cur_hour:02d}:{self.cur_min:02d}"
         return f"{d_str} {t_str}"
 
+class CalendarDialog(QDialog):
+    def __init__(self, tasks, parent=None):
+        super().__init__(parent)
+        self.tasks = tasks
+        self.setWindowTitle("일정 달력 (Calendar)")
+        self.setFixedSize(700, 650)
+        self.setStyleSheet("background-color: white;")
+        
+        self.current_date = QDate.currentDate()
+        self.init_ui()
+        
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Header (Month/Year with Prev/Next buttons)
+        header_layout = QHBoxLayout()
+        btn_prev = QPushButton("◀ 이전달")
+        btn_prev.setCursor(Qt.PointingHandCursor)
+        btn_prev.setFixedSize(100, 40)
+        btn_prev.setStyleSheet("background-color: #f0f2f5; border: 1px solid #dcdfe6; border-radius: 4px; font-weight: bold;")
+        btn_prev.clicked.connect(self.prev_month)
+        
+        self.lbl_month = QLabel()
+        self.lbl_month.setAlignment(Qt.AlignCenter)
+        self.lbl_month.setStyleSheet("font-size: 20pt; font-weight: bold; color: #303133;")
+        
+        btn_next = QPushButton("다음달 ▶")
+        btn_next.setCursor(Qt.PointingHandCursor)
+        btn_next.setFixedSize(100, 40)
+        btn_next.setStyleSheet("background-color: #f0f2f5; border: 1px solid #dcdfe6; border-radius: 4px; font-weight: bold;")
+        btn_next.clicked.connect(self.next_month)
+        
+        today_btn = QPushButton("오늘")
+        today_btn.setCursor(Qt.PointingHandCursor)
+        today_btn.setFixedSize(60, 40)
+        today_btn.setStyleSheet("background-color: #e6f7ff; color: #1890ff; border: 1px solid #91d5ff; border-radius: 4px; font-weight: bold;")
+        today_btn.clicked.connect(self.go_today)
+        
+        header_layout.addWidget(btn_prev)
+        header_layout.addStretch()
+        header_layout.addWidget(self.lbl_month)
+        header_layout.addStretch()
+        header_layout.addWidget(today_btn)
+        header_layout.addWidget(btn_next)
+        
+        layout.addLayout(header_layout)
+        
+        # Calendar Grid
+        self.grid_layout = QGridLayout()
+        self.grid_layout.setSpacing(5)
+        layout.addLayout(self.grid_layout, 1)
+        
+        self.update_calendar()
+        
+    def prev_month(self):
+        self.current_date = self.current_date.addMonths(-1)
+        self.update_calendar()
+        
+    def next_month(self):
+        self.current_date = self.current_date.addMonths(1)
+        self.update_calendar()
+        
+    def go_today(self):
+        self.current_date = QDate.currentDate()
+        self.update_calendar()
+        
+    def update_calendar(self):
+        # Clear old grid
+        for i in reversed(range(self.grid_layout.count())): 
+            widget = self.grid_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
+                
+        self.lbl_month.setText(self.current_date.toString("yyyy년 M월"))
+        
+        days_of_week = ["일", "월", "화", "수", "목", "금", "토"]
+        for i, day in enumerate(days_of_week):
+            lbl = QLabel(day)
+            lbl.setAlignment(Qt.AlignCenter)
+            style = "font-weight: bold; font-size: 13pt; padding: 5px; background-color: #f8f9fa; border-top: 2px solid #e4e7ed; border-bottom: 2px solid #e4e7ed;"
+            if i == 0: style += " color: #f56c6c;"
+            elif i == 6: style += " color: #409eff;"
+            else: style += " color: #606266;"
+            lbl.setStyleSheet(style)
+            self.grid_layout.addWidget(lbl, 0, i)
+            
+        # Group tasks by date
+        task_dict = {}
+        for t in self.tasks:
+            nr = t.get('next_run', '')
+            if not nr: continue
+            
+            # extract "YYYY-MM-DD"
+            date_str = nr.split()[0] if " " in nr else nr
+            if date_str not in task_dict:
+                task_dict[date_str] = []
+            task_dict[date_str].append(t)
+            
+        first_day = QDate(self.current_date.year(), self.current_date.month(), 1)
+        first_day_of_week = first_day.dayOfWeek() % 7 # 0 is Sunday
+        
+        row = 1
+        col = first_day_of_week
+        days_in_month = self.current_date.daysInMonth()
+        
+        # Draw blanks before first day
+        for c in range(col):
+            b_frame = QFrame()
+            b_frame.setStyleSheet("background-color: #fafbfc; border: 1px solid #ebeef5; border-radius: 4px;")
+            self.grid_layout.addWidget(b_frame, row, c)
+            
+        # Draw days
+        for day in range(1, days_in_month + 1):
+            cell_frame = QFrame()
+            cell_frame.setFrameShape(QFrame.StyledPanel)
+            cell_frame.setStyleSheet("""
+                QFrame { background-color: white; border: 1px solid #ebeef5; border-radius: 4px; }
+                QFrame:hover { background-color: #f0f9eb; border: 1px solid #c2e7b0; }
+            """)
+            
+            cell_layout = QVBoxLayout(cell_frame)
+            cell_layout.setContentsMargins(5, 5, 5, 5)
+            cell_layout.setSpacing(2)
+            
+            # 날짜 라벨
+            lbl_day = QLabel(str(day))
+            lbl_day.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            day_style = "font-size: 13pt; font-weight: bold; border: none; background: transparent;"
+            
+            if self.current_date.year() == QDate.currentDate().year() and self.current_date.month() == QDate.currentDate().month() and day == QDate.currentDate().day():
+                # Today highlight
+                day_style += " color: white; background-color: #409eff; border-radius: 12px; min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px;"
+                lbl_day.setAlignment(Qt.AlignCenter)
+            elif col == 0: day_style += " color: #f56c6c;"
+            elif col == 6: day_style += " color: #409eff;"
+            else: day_style += " color: #606266;"
+            
+            lbl_day.setStyleSheet(day_style)
+            cell_layout.addWidget(lbl_day, 0, Qt.AlignLeft | Qt.AlignTop)
+            
+            date_str = f"{self.current_date.year()}-{self.current_date.month():02d}-{day:02d}"
+            day_tasks = task_dict.get(date_str, [])
+            
+            # 태스크 건수 마커
+            if day_tasks:
+                cnt_lbl = QLabel(f"{len(day_tasks)} 건")
+                cnt_lbl.setAlignment(Qt.AlignCenter)
+                cnt_lbl.setStyleSheet("color: white; background-color: #67c23a; font-weight: bold; font-size: 11pt; border-radius: 4px; padding: 3px;")
+                cell_layout.addWidget(cnt_lbl, 0, Qt.AlignCenter)
+                
+                # 툴팁 구성 (이름 / 카페명 / 주차)
+                tooltip_lines = [f"【 {date_str} 예약 현황 】"]
+                for t in day_tasks:
+                    stage = t.get('stage_name', "")
+                    remain = t.get('remain_count', t.get('upload_count', ''))
+                    disp = stage if stage else f"{remain} 남음"
+                    tooltip_lines.append(f"• {t['name']} / {t['cafe_name']} / {disp}")
+                cell_frame.setToolTip("\n".join(tooltip_lines))
+                # Add hover hand
+                cell_frame.setCursor(Qt.PointingHandCursor)
+            else:
+                cell_layout.addStretch()
+                
+            self.grid_layout.addWidget(cell_frame, row, col)
+            
+            col += 1
+            if col > 6:
+                col = 0
+                row += 1
+                
+        # Fill remaining with blanks
+        while row < 7:
+            if col > 6:
+                col = 0
+                row += 1
+                if row > 6: break
+            
+            dummy_frame = QFrame()
+            dummy_frame.setStyleSheet("background-color: #fafbfc; border: 1px solid #ebeef5; border-radius: 4px;")
+            self.grid_layout.addWidget(dummy_frame, row, col)
+            col += 1
+            
+        for r in range(1, 7):
+            self.grid_layout.setRowStretch(r, 1)
+        for c in range(7):
+            self.grid_layout.setColumnStretch(c, 1)
+
 class WorkerSignals(QObject):
     log = Signal(str)
     finished = Signal()
@@ -530,6 +719,16 @@ class MainApp(QMainWindow):
         self.btn_cancel_res.setEnabled(True) 
         top_layout.addWidget(self.btn_cancel_res, 1) # [수정] Stretch 1
         
+        # 5. 일정 달력
+        self.btn_calendar = QPushButton(" 📅 일정 달력 (Calendar)")
+        self.btn_calendar.setObjectName("btn_calendar")
+        self.btn_calendar.setCursor(Qt.PointingHandCursor)
+        self.btn_calendar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed) 
+        self.btn_calendar.setFixedHeight(40) 
+        self.btn_calendar.setStyleSheet("background-color: #f39c12; color: white; font-weight: bold; border-radius: 4px; border: 1px solid #e67e22;")
+        self.btn_calendar.clicked.connect(self.show_calendar)
+        top_layout.addWidget(self.btn_calendar, 1) 
+        
         layout.addLayout(top_layout)
         
         # 메인: 스플리터
@@ -593,6 +792,7 @@ class MainApp(QMainWindow):
         
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.document().setMaximumBlockCount(5000) # [추가] 5000줄까지만 보관하여 메모리 누수 방지
         self.log_text.setStyleSheet("background-color: #2b2b2b; color: #f0f0f0; border-radius: 4px;") 
         log_layout.addWidget(self.log_text)
         
@@ -1322,6 +1522,13 @@ class MainApp(QMainWindow):
         self.worker_thread = threading.Thread(target=self.run_process, args=(selected_real_indices,))
         self.worker_thread.start()
 
+    def show_calendar(self):
+        if not hasattr(self, 'tasks') or not self.tasks:
+            QMessageBox.information(self, "알림", "작업 목록을 먼저 불러와주세요.")
+            return
+        dlg = CalendarDialog(self.tasks, self)
+        dlg.exec()
+
     def run_process(self, indices):
         """수동 실행용"""
         # ID별 포트 할당을 위해 전체 ID 목록 생성
@@ -1380,22 +1587,26 @@ class MainApp(QMainWindow):
         # task는 딕셔너리
         self.update_log_signal(f"=== 작업 시작: {task['cafe_name']} - {task['board_name']} ===")
         
+        def cancel_task_on_error(msg):
+            self.update_log_signal(msg)
+            self.update_log_signal(f"[{task['name']}] 재시도를 방지하기 위해 예약을 취소합니다.")
+            task['next_run'] = ""
+            self.sheet_mgr.update_date_manual(task['row_index'], "", task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
+        
         # 1. 로그인
         if not bot.login(task['id'], task['pw']):
-             self.update_log_signal("로그인 실패. 다음으로.")
+             cancel_task_on_error("작업 실패: 로그인 불가. 계정 정보나 보안 입력을 확인하세요.")
              return
-
-
-        
-        # 2. URL 및 접속
 
         # 2. URL 및 접속
         cafe_url = self.sheet_mgr.get_cafe_url(task['cafe_name'])
         if not cafe_url:
-            self.update_log_signal("URL 못찾음")
+            cancel_task_on_error(f"작업 실패: '{task['cafe_name']}'의 URL을 찾지 못했습니다. 카페 정보를 확인하세요.")
             return
             
-        if not bot.navigate_to_cafe(cafe_url): return
+        if not bot.navigate_to_cafe(cafe_url):
+             cancel_task_on_error(f"작업 실패: '{task['cafe_name']}' 카페 접속 실패. 주소나 상태를 확인하세요.")
+             return
 
         # 1-1. 기존 글 삭제 로직 (2주차 이상인 경우)
         # 카페 접속 후에 실행해야 '내가 쓴 게시글' 메뉴가 보임
@@ -1435,7 +1646,9 @@ class MainApp(QMainWindow):
             else:
                 self.update_log_signal(">>> 게시글 삭제 실패 또는 글 없음.")
 
-        if not bot.enter_board(task['board_name']): return
+        if not bot.enter_board(task['board_name']):
+             cancel_task_on_error(f"작업 실패: 게시판 '{task['board_name']}' 진입 실패. 카페에 해당 게시판이 있는지 확인하세요.")
+             return
         
         # 3. 컨텐츠 로드
         # total_cnt already calculated above
@@ -1547,7 +1760,7 @@ class MainApp(QMainWindow):
              except:
                  pass
         else:
-             self.update_log_signal("작업 실패: 글쓰기 오류")
+             cancel_task_on_error("작업 실패: 글쓰기 오류 (요소 찾기, 시간 초과 등)")
 
     def get_content_order_for_task_idx(self, task_idx):
         # 사용자 요청: 전, 후, 본문 순서 (이미지 -> 텍스트)
