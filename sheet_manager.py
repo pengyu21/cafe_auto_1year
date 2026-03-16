@@ -98,10 +98,19 @@ class GoogleSheetManager:
             "3달": 90,
             "세달": 90,
             "3개월": 90,
+            "4달": 120,
+            "네달": 120,
+            "4개월": 120,
+            "5달": 150,
+            "다섯달": 150,
+            "5개월": 150,
             "60일": 60,
             "2달": 60,
             "두달": 60,
+            "2개월": 60,
             "8주": 56,
+            "6달": 180,
+            "여섯달": 180,
             "6개월": 180,
             "1년": 365
         }
@@ -122,11 +131,12 @@ class GoogleSheetManager:
         # 프리셋 로드
         self.load_presets()
 
-    def _map_columns(self):
+    def _map_columns(self, all_rows=None):
         """헤더를 읽어 컬럼 인덱스를 동적으로 매핑 (상위 5행 검색)"""
         try:
-            # get_all_values로 전체 데이터 가져오기 (가장 확실)
-            all_rows = self.task_sheet.get_all_values()
+            # get_all_values로 전체 데이터 가져오기 (이미 로드된게 있으면 사용)
+            if all_rows is None:
+                all_rows = self.task_sheet.get_all_values()
             if not all_rows:
                 print("DEBUG: Sheet is completely empty.")
                 return
@@ -314,14 +324,14 @@ class GoogleSheetManager:
             return row_index # 에러 발생 시 원래 인덱스 반환 (혹은 None?) -> 안전하게 원래값
     def get_tasks(self):
         """Reads all tasks from '카페작업리스트'."""
-        # 헤더가 없으면 다시 매핑 시도
-        if not hasattr(self, 'HEADER_ROW_INDEX') or self.HEADER_ROW_INDEX is None:
-            self._map_columns()
-            
         try:
             rows = self.task_sheet.get_all_values()
+
+            # 헤더가 없으면 다시 매핑 시도 (로드한 rows 재사용)
+            if not hasattr(self, 'HEADER_ROW_INDEX') or self.HEADER_ROW_INDEX is None:
+                self._map_columns(all_rows=rows)
         except Exception as e:
-            print(f"Error fetching sheet data: {e}")
+            print(f"Error fetching sheet data or mapping columns: {e}")
             return []
 
         tasks = []
@@ -338,8 +348,11 @@ class GoogleSheetManager:
         if data_start_row >= len(rows):
              return tasks # No data rows
 
-        # [추가] 로그 카운트 미리 로드
-        log_counts = self._load_log_counts()
+        # [최적화] 불필요한 로그 카운트 로드 제거 (사용되지 않음)
+        # log_counts = self._load_log_counts()
+        
+        # [최적화] 폴더 리스팅 캐시
+        dir_cache = {}
 
         for idx, row in enumerate(rows[data_start_row:], start=data_start_row): 
             # Pad row if too short
@@ -414,8 +427,8 @@ class GoogleSheetManager:
                     raw_date = row[col_idx]
                     date_str = self._parse_date_robust(raw_date)
 
-                # 미완료 - 디버그 로그 활성화
-                print(f"  [GET_TASKS DEBUG] Row {idx+1}, Stage {i+1}, Col {col_idx}: RawDate='{val}', ParsedDate='{date_str}'")
+                # 미완료 - 디버그 로그 (속도를 위해 주석 처리)
+                # print(f"  [GET_TASKS DEBUG] Row {idx+1}, Stage {i+1}, Col {col_idx}: RawDate='{val}', ParsedDate='{date_str}'")
                 incomplete_stages.append((i, date_str))
 
             is_completed_total = (completed_stages_count >= total_stages)
@@ -462,6 +475,51 @@ class GoogleSheetManager:
                 
                 # [수정] 단일 스테이지인데 날짜가 없는 경우도 처리하기 위해 로직 보강
                 # 1. Loop through incomplete stages
+                # [수정] 파일 존재 여부 확인 (전체 미완료 스테이지 검사하여 세밀하게 안내)
+                # 이 로직은 단일 행(row)에 대해 한 번만 전체를 검사함
+                global_missing_files_str = ""
+                global_file_exists = True
+                folder_path = row[self.COL_FILE_PATH]
+                
+                stages_to_check = []
+                # 파일 검사는 모든 미완료 스테이지(incomplete_stages)에 대해 수행
+                s_name_base = str(preset_str).strip()
+                s_arr_all = [s.strip() for s in s_name_base.split(',')] if "," in s_name_base else [s_name_base]
+                
+                for inc_idx, _ in incomplete_stages:
+                    if inc_idx < len(s_arr_all):
+                        s_name = s_arr_all[inc_idx]
+                        if s_name not in stages_to_check:
+                            stages_to_check.append(s_name)
+                            
+                global_missing_stages = []
+                if folder_path and os.path.exists(folder_path):
+                    # 캐시 확인
+                    if folder_path in dir_cache:
+                        folder_files = dir_cache[folder_path]
+                    else:
+                        try:
+                            folder_files = [f for f in os.listdir(folder_path) if f.endswith('.txt')]
+                            dir_cache[folder_path] = folder_files
+                        except:
+                            folder_files = []
+                            dir_cache[folder_path] = []
+
+                    for s_name in stages_to_check:
+                        s_exists = False
+                        for fname in folder_files:
+                            if f"[{s_name}]" in fname or s_name in fname:
+                                s_exists = True
+                                break
+                        
+                        if not s_exists:
+                            global_missing_stages.append(s_name)
+                else:
+                    global_missing_stages = stages_to_check
+                    
+                global_file_exists = (len(global_missing_stages) == 0)
+                global_missing_files_str = ",".join(global_missing_stages)
+
                 processed_first_pending = False
                 
                 # [수정] 단일 스테이지 및 멀티 스테이지 처리 로직 보강
@@ -494,41 +552,31 @@ class GoogleSheetManager:
                     if not "," in str(preset_str) and stage_idx == 0:
                         current_period_name = str(preset_str).strip()
 
-                        
-                    # [수정] 파일 존재 여부 확인 (전체 미완료 스테이지 검사하여 세밀하게 안내)
-                    folder_path = row[self.COL_FILE_PATH]
-                    file_exists = True
-                    missing_stages = []
+                    # [수정] 예약된 작업은 개별 파일 검사 필요, 대기중은 글로벌 검사
                     
-                    stages_to_check = []
-                    if not date_str: # 대기중인 작업 (전체 표시)
-                        for inc_idx, _ in incomplete_stages:
-                            s_name = str(preset_str).strip()
-                            if "," in str(preset_str):
-                                s_arr = [s.strip() for s in str(preset_str).split(',')]
-                                if inc_idx < len(s_arr):
-                                    s_name = s_arr[inc_idx]
-                            if s_name not in stages_to_check:
-                                stages_to_check.append(s_name)
-                    else: # 예약된 작업 (현재 스테이지만 표시)
-                        stages_to_check.append(current_period_name)
-                        
-                    if folder_path and os.path.exists(folder_path):
-                        for s_name in stages_to_check:
-                            s_exists = False
-                            patterns = [f"[{s_name}]*.txt", f"*{s_name}*.txt"]
-                            for pat in patterns:
-                                full_pat = os.path.join(folder_path, pat)
-                                if glob.glob(full_pat):
+                    if date_str: # 예약된 작업 (현재 스테이지만 표시)
+                        s_exists = False
+                        if folder_path and os.path.exists(folder_path):
+                            # 캐시 사용
+                            if folder_path in dir_cache:
+                                folder_files = dir_cache[folder_path]
+                            else:
+                                try:
+                                    folder_files = [f for f in os.listdir(folder_path) if f.endswith('.txt')]
+                                    dir_cache[folder_path] = folder_files
+                                except:
+                                    folder_files = []
+                                    dir_cache[folder_path] = []
+                            
+                            for fname in folder_files:
+                                if f"[{current_period_name}]" in fname or current_period_name in fname:
                                     s_exists = True
                                     break
-                            if not s_exists:
-                                missing_stages.append(s_name)
-                    else:
-                        missing_stages = stages_to_check
-                        
-                    file_exists = (len(missing_stages) == 0)
-                    missing_files_str = ",".join(missing_stages)
+                        missing_files_str = "" if s_exists else current_period_name
+                        file_exists = s_exists
+                    else: # 대기중인 작업 (전체 표시)
+                        file_exists = global_file_exists
+                        missing_files_str = global_missing_files_str
                     
                     task = {
                         'row_index': idx + 1,
@@ -740,6 +788,30 @@ class GoogleSheetManager:
         key = f"body_{stage_idx}"
         return task.get(key, "")
 
+    def get_days_from_period(self, p_name):
+        """Parse period string dynamically (e.g., '7개월', '1년') to return offset days."""
+        if not p_name:
+            return 14
+        
+        p_str = str(p_name).strip()
+        
+        # Check standard map first
+        if p_str in getattr(self, 'PERIOD_MAP', {}):
+            return self.PERIOD_MAP[p_str]
+            
+        # Parse dynamically for N달, N개월, N년, N일, N주
+        import re
+        match = re.search(r'(\d+)(주|일|개월|달|년)', p_str)
+        if match:
+            num = int(match.group(1))
+            unit = match.group(2)
+            if unit == '주': return num * 7
+            elif unit == '일': return num
+            elif unit in ['개월', '달']: return num * 30
+            elif unit == '년': return num * 365
+            
+        return 14
+
     def update_date_manual(self, row_index, date_str, task_id=None, stage_index=None, task_data=None):
         """사용자가 수동으로 예약 날짜를 지정했을 때 호출됨. 향후 단계 연쇄 자동 계산 포함"""
         try:
@@ -809,7 +881,7 @@ class GoogleSheetManager:
                             print(f"[AUTO-SCHEDULER] Total computed stages: {total_stages}")
                             
                             current_p_name = periods[stage_index] if stage_index < len(periods) else "2주"
-                            current_days = self.PERIOD_MAP.get(current_p_name, 14)
+                            current_days = self.get_days_from_period(current_p_name)
                             base_surgery_date = current_date_obj - timedelta(days=current_days)
                             print(f"[AUTO-SCHEDULER] Base surgery computed: {base_surgery_date} (Subtracted {current_days} days for {current_p_name})")
                             
@@ -817,7 +889,7 @@ class GoogleSheetManager:
                                 if next_idx >= len(sched_cols): break
                                 
                                 p_name = periods[next_idx] if next_idx < len(periods) else "2주"
-                                days_offset = self.PERIOD_MAP.get(p_name, 14)
+                                days_offset = self.get_days_from_period(p_name)
                                 next_target_date = base_surgery_date + timedelta(days=days_offset)
                                 
                                 # 시간 랜덤 설정
@@ -954,7 +1026,7 @@ class GoogleSheetManager:
         current_date_obj = datetime.now()
         
         # 현재 주기의 일수를 구하여 수술일(기준일) 역산
-        current_days = self.PERIOD_MAP.get(current_period_name, 14)
+        current_days = self.get_days_from_period(current_period_name)
         base_surgery_date = current_date_obj - timedelta(days=current_days)
         
         # 다음 단계부터 끝까지 순회
@@ -974,7 +1046,7 @@ class GoogleSheetManager:
              elif periods:
                  p_name = periods[-1] # 마지막 주기 반복 (예: 1달, 1달, 1달...)
                  
-             days = self.PERIOD_MAP.get(p_name, 14) 
+             days = self.get_days_from_period(p_name) 
              
              # 날짜 계산 (역산된 기준일 + 해당 기간의 절대값)
              next_date_obj = base_surgery_date + timedelta(days=days)

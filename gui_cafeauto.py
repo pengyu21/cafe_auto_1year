@@ -499,13 +499,14 @@ class TaskLoaderThread(QThread):
             self.errorOccurred.emit(str(e))
 
 
-__version__ = "1.1.0"
+__version__ = "1.1.2"
 
 class MainApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"네이버 카페 자동 포스팅 (Naver Cafe Auto) v{__version__}")
-        self.resize(1500, 900) # 넓이 조정 (1300 -> 1500)
+        # App Info
+        self.setWindowTitle('네이버 카페 자동 포스팅 (Naver Cafe Auto) v1.1.2')
+        self.resize(1500, 850) # 넓이 조정 (1300 -> 1500)
         
         self.sheet_mgr = GoogleSheetManager()
         self.tasks = []
@@ -1058,13 +1059,14 @@ class MainApp(QMainWindow):
                     
                 # 2. 예약 vs 대기 분류
                 is_ready = True
-                if task['next_run']:
+                nr_val = str(task.get('next_run', '')).strip()
+                if nr_val:
                     try:
                         # 포맷 시도
                         try:
-                            res_time = datetime.strptime(task['next_run'], "%Y-%m-%d %H:%M")
+                            res_time = datetime.strptime(nr_val, "%Y-%m-%d %H:%M")
                         except:
-                            res_time = datetime.strptime(task['next_run'], "%Y-%m-%d")
+                            res_time = datetime.strptime(nr_val, "%Y-%m-%d")
                         
                         if res_time > now:
                             is_ready = False
@@ -1151,151 +1153,128 @@ class MainApp(QMainWindow):
         return False
 
     def fill_table(self, table, rows_with_index, all_ids=None):
+        table.setSortingEnabled(False)
+        table.clearContents()
         table.setRowCount(0)
         table.setRowCount(len(rows_with_index))
+        # [추가] 수동으로 수직 헤더 라벨 리셋 (1, 2, 3...)
+        table.setVerticalHeaderLabels([str(i+1) for i in range(len(rows_with_index))])
+        
         for r, (real_idx, task) in enumerate(rows_with_index):
-            # 중앙 정렬된 체크박스 위젯 생성
-            chk_widget = QWidget()
-            chk_layout = QHBoxLayout(chk_widget)
-            chk_layout.setContentsMargins(0, 0, 0, 0)
-            chk_layout.setAlignment(Qt.AlignCenter)
-            chk_box = QCheckBox()
-            chk_layout.addWidget(chk_box)
-            table.setCellWidget(r, 0, chk_widget)
-            
-            # 데이터 저장용 hidden item (UserRole에 real_idx 저장)
-            data_item = QTableWidgetItem()
-            data_item.setData(Qt.UserRole, real_idx)
-            table.setItem(r, 0, data_item)
-            
-            item_name = QTableWidgetItem(task['name'])
-            item_name.setTextAlignment(Qt.AlignCenter)
-            table.setItem(r, 1, item_name)
-            
-            # ID 및 Port 계산
-            uid = task['id']
-            item_id = QTableWidgetItem(uid)
-            item_id.setTextAlignment(Qt.AlignCenter)
-            table.setItem(r, 2, item_id)
-            
-            port_str = "-"
-            if all_ids and uid in all_ids:
-                try:
-                    p_idx = all_ids.index(uid)
-                    port_str = str(9222 + p_idx)
-                except:
-                    pass
-            item_port = QTableWidgetItem(port_str)
-            item_port.setTextAlignment(Qt.AlignCenter)
-            table.setItem(r, 3, item_port)
-            
-            item_cafe = QTableWidgetItem(task['cafe_name'])
-            item_cafe.setTextAlignment(Qt.AlignCenter)
-            table.setItem(r, 4, item_cafe)
+            try:
+                # 중앙 정렬된 체크박스 위젯 생성
+                chk_widget = QWidget()
+                chk_layout = QHBoxLayout(chk_widget)
+                chk_layout.setContentsMargins(0, 0, 0, 0)
+                chk_layout.setAlignment(Qt.AlignCenter)
+                chk_box = QCheckBox()
+                chk_layout.addWidget(chk_box)
+                table.setCellWidget(r, 0, chk_widget)
+                
+                # 데이터 저장용 hidden item (UserRole에 real_idx 저장)
+                data_item = QTableWidgetItem()
+                data_item.setData(Qt.UserRole, real_idx)
+                table.setItem(r, 0, data_item)
+                
+                item_name = QTableWidgetItem(task['name'])
+                item_name.setTextAlignment(Qt.AlignCenter)
+                table.setItem(r, 1, item_name)
+                
+                # ID 및 Port 계산
+                uid = task['id']
+                
+                item_id = QTableWidgetItem(uid)
+                item_id.setTextAlignment(Qt.AlignCenter)
+                table.setItem(r, 2, item_id)
+                
+                port_str = "-"
+                if all_ids and uid in all_ids:
+                    try:
+                        p_idx = all_ids.index(uid)
+                        port_str = str(9222 + p_idx)
+                    except:
+                        pass
+                item_port = QTableWidgetItem(port_str)
+                item_port.setTextAlignment(Qt.AlignCenter)
+                table.setItem(r, 3, item_port)
+                
+                item_cafe = QTableWidgetItem(task['cafe_name'])
+                item_cafe.setTextAlignment(Qt.AlignCenter)
+                table.setItem(r, 4, item_cafe)
 
-            item_board = QTableWidgetItem(task['board_name'])
-            item_board.setTextAlignment(Qt.AlignCenter)
-            table.setItem(r, 5, item_board)
+                item_board = QTableWidgetItem(task['board_name'])
+                item_board.setTextAlignment(Qt.AlignCenter)
+                table.setItem(r, 5, item_board)
 
-            if table == self.table_completed:
-                continue
+                if table == self.table_completed:
+                    continue
 
-            # 6. 업로드 (남은 주기 표시)
-            # 회차(Count) 컬럼은 제거하고, '업로드' 컬럼에 남은 스테이지만 표시
-            # task['period'] 와 task['upload_count'](현재 남은 수), 그리고 총 횟수(H열.. 은 여기 task엔 없나?)
-            # task 데이터에 'upload_count'는 현재 F열(남은 횟수)임.
-            # 총 횟수를 알기 위해선 sheet_manager를 통해야 하는데, 
-            # get_remaining_periods 함수가 total_cnt_str를 요구함.
-            # 하지만 task 딕셔너리에 total_cnt(H열)가 없음. -> get_tasks에서 안 가져옴?
-            # get_tasks를 수정해서 H열 값도 가져와야 완벽하지만,
-            # 일단 여기서는 decrement_upload_count 로직처럼 H열을 읽을 수가 없음 (task는 메모리 데이터).
-            # => 임시방편: '단계' 문자열의 콤마 개수로 전체 추론 or 남은 횟수로 추론.
-            #    (가장 안전한건 get_tasks에서 total_count도 읽어오는 것. 하지만 지금 파일 하나만 수정 중.)
-            #    일단 sheet_manager.get_remaining_periods는 total_cnt를 인자로 받음.
-            
-            # 여기서 self.sheet_mgr.get_remaining_periods 를 쓰려면 total_count가 필요.
-            # task 정보에 'upload_count_total' 같은게 없으므로... (F열만 있음)
-            # -> 꼼수: F열이 '남은 횟수'이고, Period 스트링을 ','로 쪼개면 전체 개수 나옴.
-            #    (물론 1주*3회 같은 경우는 Period스트링만으론 모름. 하지만 지금 사용자는 "2주,한달" 같이 Period=Stage임)
-            #    따라서 Period의 항목 수가 Total Count라고 가정.
-            
-            p_str = task['period']
-            if "," in p_str:
-                total_cnt = len(p_str.split(','))
-            elif p_str:
-                total_cnt = 1
-            else:
-                total_cnt = 1
-            
-            # remain_str = task['upload_count'] # This was wrong (It refers to H column now)
-            # Use 'remain_count' (F column) if available, otherwise fallback to H column (Total)
-            remain_str = task.get('remain_count', task['upload_count'])
-            
-            # 예약된 작업 테이블('Scheduled')인 경우에만 필터링?
-            # 사용자: "예약된 작업에는" 이라고 했지만, 대기중인 것도 앞으로 할거니까 남은거 보여주는게 맞음.
-            # [수정] 테이블 종류에 따라 표시 방식 다르게 적용
-            # 1. 대기중인 작업(Ready): 전체 계획(Full Plan) 표시 (예: "2주,1달,3달")
-            # 2. 예약된 작업(Scheduled): 현재 스테이지(Specific Stage) 표시 (예: "1달")
-            
-            display_period = "-"
-            
-            if table == self.table_ready:
-                # 대기중 -> 전체 표시
-                display_period = p_str
-            else:
-                # 예약됨(또는 완료) -> 현재 스테이지 표시
-                period_list = []
-                if "," in p_str:
-                    period_list = [p.strip() for p in p_str.split(',')]
+                # 6. 업로드 (남은 주기 표시)
+                p_str = task['period']
+                display_period = "-"
+                
+                if table == self.table_ready:
+                    # 대기중 -> 전체 표시
+                    display_period = p_str
                 else:
-                    period_list = [p_str.strip()]
+                    # 예약됨(또는 완료) -> 현재 스테이지 표시
+                    period_list = []
+                    if "," in p_str:
+                        period_list = [p.strip() for p in p_str.split(',')]
+                    else:
+                        period_list = [p_str.strip()]
+                        
+                    stage_idx = task.get('current_stage_idx', 0)
                     
-                stage_idx = task.get('current_stage_idx', 0)
+                    if 0 <= stage_idx < len(period_list):
+                         display_period = period_list[stage_idx]
+                    else:
+                         display_period = p_str if p_str else "완료/빈값"
                 
-                if 0 <= stage_idx < len(period_list):
-                     display_period = period_list[stage_idx]
-                else:
-                     display_period = p_str 
-            
-            if not display_period: display_period = "-"
-            
-            # [추가] 파일 존재 여부 체크 (빨간색 표시)
-            file_exists = task.get('file_exists', True)
-            missing_files_str = task.get('missing_files_str', '')
-            
-            if not file_exists:
-                if missing_files_str:
-                    display_period += f" ({missing_files_str} 없음!)"
-                else:
-                    display_period += " (파일없음!)"
-            
-            item_period = QTableWidgetItem(display_period)
-            item_period.setTextAlignment(Qt.AlignCenter)
-            
-            if not file_exists:
-                item_period.setForeground(QColor("#ffffff")) # 글자색 흰색
-                item_period.setBackground(QColor("#e74c3c")) # 배경색 빨간색으로 강력하게 표시
-                font = item_period.font()
-                font.setBold(True)
-                item_period.setFont(font)
+                if not display_period: display_period = "-"
                 
-            table.setItem(r, 6, item_period)
+                # [추가] 파일 존재 여부 체크 (빨간색 표시)
+                file_exists = task.get('file_exists', True)
+                missing_files_str = task.get('missing_files_str', '')
+                
+                if not file_exists:
+                    if missing_files_str:
+                        display_period += f" ({missing_files_str} 없음!)"
+                    else:
+                        display_period += " (파일없음!)"
+                
+                item_period = QTableWidgetItem(display_period)
+                item_period.setTextAlignment(Qt.AlignCenter)
+                
+                if not file_exists:
+                    item_period.setForeground(QColor("#ffffff")) # 글자색 흰색
+                    item_period.setBackground(QColor("#e74c3c")) # 배경색 빨간색으로 강력하게 표시
+                    font = item_period.font()
+                    font.setBold(True)
+                    item_period.setFont(font)
+                    
+                table.setItem(r, 6, item_period)
 
-            # 7. 다음 예약
-            next_run_str = task['next_run']
-            item_res = QTableWidgetItem(next_run_str)
-            item_res.setTextAlignment(Qt.AlignCenter)
-            
-            # 예약 테이블인 경우 꾸미기
-            if table == self.table_scheduled and next_run_str:
-                item_res.setText(f"[예약됨] {next_run_str}")
-                # 형광색 대신 편안한 초록색으로 변경 (#27ae60)
-                item_res.setForeground(QColor("#27ae60")) 
-                font = item_res.font()
-                font.setBold(True)
-                item_res.setFont(font)
+                # 7. 다음 예약
+                next_run_str = task['next_run']
+                item_res = QTableWidgetItem(next_run_str)
+                item_res.setTextAlignment(Qt.AlignCenter)
                 
-            table.setItem(r, 7, item_res)
+                # 예약 테이블인 경우 꾸미기
+                if table == self.table_scheduled and next_run_str:
+                    item_res.setText(f"[예약됨] {next_run_str}")
+                    # 형광색 대신 편안한 초록색으로 변경 (#27ae60)
+                    item_res.setForeground(QColor("#27ae60")) 
+                    font = item_res.font()
+                    font.setBold(True)
+                    item_res.setFont(font)
+                    
+                table.setItem(r, 7, item_res)
+            except Exception as e:
+                print(f"Error filling row {r}: {e}")
+                continue
+            
+        table.setSortingEnabled(True)
 
     def set_scheduler_mode(self, is_on):
         """예약 모드 ON/OFF 설정"""
@@ -1374,6 +1353,7 @@ class MainApp(QMainWindow):
                 # [수정] stage_index 전달
                 self.sheet_mgr.update_date_manual(task['row_index'], "", task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
                 self.log(f"   [{task['name']}] 예약 취소 완료")
+                QApplication.processEvents() # Prevent GUI freeze and rendering glitches
             
             # 리스트 갱신 (전체 다시 로드)
             self.load_tasks() 
