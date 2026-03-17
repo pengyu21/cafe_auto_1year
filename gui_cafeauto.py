@@ -499,13 +499,13 @@ class TaskLoaderThread(QThread):
             self.errorOccurred.emit(str(e))
 
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
 class MainApp(QMainWindow):
     def __init__(self):
         super().__init__()
         # App Info
-        self.setWindowTitle('네이버 카페 자동 포스팅 (Naver Cafe Auto) v1.1.2')
+        self.setWindowTitle('네이버 카페 자동 포스팅 (Naver Cafe Auto) v1.1.3')
         self.resize(1500, 850) # 넓이 조정 (1300 -> 1500)
         
         self.sheet_mgr = GoogleSheetManager()

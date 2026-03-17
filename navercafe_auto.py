@@ -417,14 +417,14 @@ class NaverCafeBot:
                         current_handles = self.driver.window_handles
                         btn.click()
                         
-                        # 새 창/탭 대기
+                        # 새 창/탭 대기 및 전환 (단 한번만 실행)
                         time.sleep(3)
                         new_handles = self.driver.window_handles
                         if len(new_handles) > len(current_handles):
                              self.driver.switch_to.window(new_handles[-1])
-                             print("새 글쓰기 창으로 전환되었습니다.")
+                             print(f"새 글쓰기 창으로 전환되었습니다. (Handle: {self.driver.current_window_handle})")
                         else:
-                            print("새 창이 열리지 않았습니다. 기존 창에서 진행합니다.")
+                            print("기존 창에서 에디터가 열렸습니다. (Inline Mode)")
                         break # 성공 시 루프 탈출
                         
                     else:
@@ -451,9 +451,8 @@ class NaverCafeBot:
             
             time.sleep(3)
 
-            # 새 탭이 열릴 수 있음 -> 탭 전환
-            if len(self.driver.window_handles) > 1:
-                self.driver.switch_to.window(self.driver.window_handles[-1])
+            # 스마트에디터 로딩 대기
+            time.sleep(5) 
 
             # 스마트에디터 로딩 대기
             time.sleep(5) 
@@ -573,16 +572,12 @@ class NaverCafeBot:
                     if not cval:
                         continue
 
-                    # 텍스트 입력 전 frame 복구 (cafe_main) & 포커스
+                    # [제거] 매 텍스트마다 윈도우/프레임 전환하는 오작동 로직 제거
+                    # 이미지 업로드 등에서 프레임이 꼬였을 때만 복구하도록 수정
                     try:
-                        self.driver.switch_to.window(main_window_handle)
-                        try:
-                            self.driver.switch_to.frame("cafe_main")
-                            # 중요: 본문 영역 다시 포커스 (이미지 업로드 등으로 포커스 잃을 수 있음)
-                            body_container = self.driver.find_element(By.CSS_SELECTOR, "article.se-components-wrap")
-                            body_container.click()
-                        except:
-                            pass
+                        # 현재 윈도우가 에디터 윈도우인지 확인 (새창 모드 대응)
+                        if self.driver.current_window_handle != main_window_handle:
+                             self.driver.switch_to.window(main_window_handle)
                     except:
                         pass
 
