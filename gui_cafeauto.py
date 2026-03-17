@@ -10,14 +10,74 @@ from PySide6.QtWidgets import (
     QSplitter, QFrame, QLineEdit, QScrollArea, QAbstractItemView, QTextEdit, # [추가] QTextEdit
     QSizePolicy, QGridLayout # [추가] QSizePolicy, QGridLayout
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QTime, QDate, QDateTime, QSize, QObject # [추가] QObject
-from PySide6.QtGui import QIcon, QFont, QAction, QColor, QDesktopServices, QIntValidator, QPalette # [추가] QPalette
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QTime, QDate, QDateTime, QSize, QObject, QRect # [추가] QRect
+from PySide6.QtGui import QIcon, QFont, QAction, QColor, QDesktopServices, QIntValidator, QPalette, QPainter, QPen # [추가] QPen
 from sheet_manager import GoogleSheetManager
 from navercafe_auto import NaverCafeBot
 
-class DatePickerDialog(QDialog):
-    def __init__(self, current_text="", parent=None):
+class TaskCountCalendar(QCalendarWidget):
+    """날짜별 예약 건수를 표시하는 커스텀 달력 위젯"""
+    def __init__(self, tasks, parent=None):
         super().__init__(parent)
+        self.tasks = tasks
+        self.task_counts = self._calculate_counts()
+
+    def _calculate_counts(self):
+        counts = {}
+        for t in self.tasks:
+            nr = t.get('next_run', '')
+            if nr:
+                date_str = nr.split()[0] if " " in nr else nr
+                counts[date_str] = counts.get(date_str, 0) + 1
+        return counts
+
+    def paintCell(self, painter, rect, date):
+        is_selected = (date == self.selectedDate())
+        
+        if is_selected:
+            painter.save()
+            # 1. 배경 채우기 (선명한 옅은 파란색)
+            painter.setBrush(QColor("#a0c8f0")) # 더 선명한 파란색
+            # [추가] 테두리도 그려서 더 명확하게 표시
+            painter.setPen(QPen(QColor("#3a86ff"), 2)) # 진한 파란색 테두리
+            painter.drawRect(rect.adjusted(1, 1, -1, -1))
+            
+            # 2. 날짜 텍스트 (검은색으로 명확하게)
+            painter.setPen(Qt.black)
+            font = painter.font()
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(rect, Qt.AlignCenter, str(date.day()))
+            painter.restore()
+        else:
+            super().paintCell(painter, rect, date)
+            
+        # 3. 태스크 건수 표시
+        date_str = date.toString("yyyy-MM-dd")
+        count = self.task_counts.get(date_str, 0)
+        
+        if count > 0:
+            painter.save()
+            painter.setPen(QColor("#ffffff"))
+            font = painter.font()
+            font.setPointSize(8)
+            font.setBold(True)
+            painter.setFont(font)
+            
+            count_text = f"{count}건"
+            bg_rect = QRect(rect.right() - 25, rect.top() + 2, 22, 14)
+            painter.setBrush(QColor("#67c23a"))
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(bg_rect, 4, 4)
+            
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(bg_rect, Qt.AlignCenter, count_text)
+            painter.restore()
+
+class DatePickerDialog(QDialog):
+    def __init__(self, current_text="", tasks=None, parent=None):
+        super().__init__(parent)
+        self.tasks = tasks if tasks else []
         self.setWindowTitle("첫 실행 일시 설정")
         self.resize(600, 400)
         self.setStyleSheet("background-color: white;")
@@ -36,19 +96,29 @@ class DatePickerDialog(QDialog):
         content_layout.setSpacing(30)
         
         # 1. 왼쪽: 달력 (커스텀 스타일링 강화)
-        self.calendar = QCalendarWidget()
+        self.calendar = TaskCountCalendar(self.tasks)
         self.calendar.setGridVisible(True)
         self.calendar.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
         
         # [수정] Palette 강제 적용 (시스템 테마 오버라이드)
         p = self.calendar.palette()
-        p.setColor(QPalette.Highlight, QColor("#2ecc71")) # 초록색
-        p.setColor(QPalette.HighlightedText, Qt.white)
+        p.setColor(QPalette.Highlight, QColor("#add8e6")) # 옅은 파란색 (선택 시)
+        p.setColor(QPalette.HighlightedText, Qt.black)
+        p.setColor(QPalette.Inactive, QPalette.Highlight, QColor("#add8e6")) # 비활성 상태에서도 색상 유지
+        p.setColor(QPalette.Inactive, QPalette.HighlightedText, Qt.black)
         self.calendar.setPalette(p)
         
         self.calendar.setStyleSheet("""
-            QCalendarWidget QWidget { alternation-background-color: #f7f9fb; }
-            
+            QCalendarWidget QAbstractItemView {
+                selection-background-color: #a0c8f0;
+                selection-color: black;
+                background-color: white;
+                outline: none;
+            }
+            QCalendarWidget QAbstractItemView:disabled {
+                selection-background-color: #a0c8f0;
+                selection-color: black;
+            }
             QCalendarWidget QWidget#qt_calendar_navigationbar { 
                 background-color: #409eff; 
                 min-height: 40px; 
@@ -75,23 +145,15 @@ class DatePickerDialog(QDialog):
                 image: none; 
                 width: 10px;
             }
-            
-            /* [수정] 날짜 선택 색상 확실하게 적용 */
-            QCalendarWidget QAbstractItemView {
-                selection-background-color: #2ecc71; 
-                selection-color: white;
+            QCalendarWidget QSpinBox {
+                width: 50px;
+                font-size: 14px;
                 background-color: white;
-                color: #333;
-                outline: none; /* 점선 테두리 제거 */
-            }
-            QCalendarWidget QAbstractItemView:enabled { 
-                selection-background-color: #2ecc71; 
-                selection-color: white;
-            }
-            QCalendarWidget QAbstractItemView:disabled { 
-                color: #bfbfbf; 
+                selection-background-color: #409eff;
             }
         """)
+        # [추가] 선택 변경 시 달력 강제 업데이트 (그리기 갱신)
+        self.calendar.selectionChanged.connect(self.calendar.update)
         content_layout.addWidget(self.calendar)
 
         # 2. 시간 설정 (우측 패널)
@@ -1008,7 +1070,7 @@ class MainApp(QMainWindow):
                 task = self.tasks[task_idx]
                 current_val = task.get('next_run', '')
                 
-                dlg = DatePickerDialog(current_val, self)
+                dlg = DatePickerDialog(current_val, self.tasks, self)
                 if dlg.exec():
                     new_date = dlg.get_datetime_str()
                     
