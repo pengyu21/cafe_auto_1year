@@ -865,8 +865,8 @@ class MainApp(QMainWindow):
         # 차단할 키워드/패턴
         block_keywords = [
             "Traceback", "AttributeError", "selenium.common.exceptions",
-            "urllib3.exceptions", "Stacktrace:", "GetHandleVerifier",
-            "Quota exceeded", "429", "RESOURCE_EXHAUSTED"
+            "urllib3.exceptions", "Stacktrace:", "GetHandleVerifier"
+            # "Quota exceeded", "429", "RESOURCE_EXHAUSTED" -> 제한 원인 확인을 위해 주석 처리
         ]
         
         for raw_line in lines:
@@ -1569,9 +1569,26 @@ class MainApp(QMainWindow):
         
         def cancel_task_on_error(msg):
             self.update_log_signal(msg)
-            self.update_log_signal(f"[{task['name']}] 재시도를 방지하기 위해 예약을 취소합니다.")
-            task['next_run'] = ""
-            self.sheet_mgr.update_date_manual(task['row_index'], "", task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
+            
+            # 실패 횟수 추적 로직 추가
+            if not hasattr(self, 'task_retry_counts'):
+                self.task_retry_counts = {}
+                
+            task_id_key = f"{task.get('id', '')}_{task.get('row_index', '')}"
+            current_retries = self.task_retry_counts.get(task_id_key, 0)
+            
+            if current_retries >= 2:
+                self.update_log_signal(f"[{task['name']}] 2회 이상 실패하여 해당 일정을 스킵(취소)합니다.")
+                task['next_run'] = ""
+                self.sheet_mgr.update_date_manual(task['row_index'], "", task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
+                self.task_retry_counts[task_id_key] = 0 # 리셋
+            else:
+                self.task_retry_counts[task_id_key] = current_retries + 1
+                self.update_log_signal(f"[{task['name']}] 예약 일정은 유지됩니다. ({self.task_retry_counts[task_id_key]}/2회 재시도 실패)")
+                # 에러 원인 수정 시 다음 스케줄러 루프에서 재시도됨
+            self.update_log_signal(f"[{task['name']}] 예약 일정은 유지됩니다. 에러 원인(파일, 계정 등)을 수정하시면 재시도됩니다.")
+            # task['next_run'] = ""
+            # self.sheet_mgr.update_date_manual(task['row_index'], "", task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
         
         # 1. 로그인
         if not bot.login(task['id'], task['pw']):

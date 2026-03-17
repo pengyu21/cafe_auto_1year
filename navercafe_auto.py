@@ -945,9 +945,19 @@ class NaverCafeBot:
             return None, None, False
             
         try:
-            with open(target_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
+            lines = None
+            for enc in ['utf-8', 'utf-8-sig', 'cp949', 'utf-16']:
+                try:
+                    with open(target_file, 'r', encoding=enc) as f:
+                        lines = f.readlines()
+                    break
+                except UnicodeDecodeError:
+                    continue
+
+            if lines is None:
+                print(f"파일 인코딩 오류 (지원하지 않는 형식): {target_file}")
+                return None, None, False
+                
             if not lines:
                 return None, None, False
                 
@@ -1051,8 +1061,14 @@ class NaverCafeBot:
             return None
             
         try:
-            with open(target_file, 'r', encoding='utf-8') as f:
-                return f.read().strip()
+            for enc in ['utf-8', 'utf-8-sig', 'cp949', 'utf-16']:
+                try:
+                    with open(target_file, 'r', encoding=enc) as f:
+                        return f.read().strip()
+                except UnicodeDecodeError:
+                    continue
+            print(f"텍스트 파일 인코딩 오류: {target_file}")
+            return None
         except Exception as e:
             print(f"텍스트 파일 로드 실패: {e}")
             return None

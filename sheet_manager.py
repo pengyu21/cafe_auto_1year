@@ -520,6 +520,9 @@ class GoogleSheetManager:
                 global_file_exists = (len(global_missing_stages) == 0)
                 global_missing_files_str = ",".join(global_missing_stages)
 
+                # [수정] 대기중 중복 제거: 해당 행에 하나라도 예약 날짜가 잡힌 스테이지가 있으면 대기목록(Ready)에 표시 안 함
+                has_any_scheduled = any(ds for _, ds in incomplete_stages)
+                
                 processed_first_pending = False
                 
                 # [수정] 단일 스테이지 및 멀티 스테이지 처리 로직 보강
@@ -534,10 +537,10 @@ class GoogleSheetManager:
                          should_create = True
                     elif not processed_first_pending:
                          # 날짜가 없으면 아직 설정되지 않은 '대기중' 상태.
-                         # 대기중인 예약은 여러 단계가 남아있어도 그룹핑해서 한 줄("2주,1달,3달")로 보여주기 위해
-                         # '첫 번째' 대기 상태만 대표로 생성함
-                         should_create = True
-                         processed_first_pending = True
+                         # [수정] 만약 예약된 항목이 하나라도 있으면, '대기중' 항목은 굳이 표시하지 않음 (중복 방지)
+                         if not has_any_scheduled:
+                             should_create = True
+                             processed_first_pending = True
                     
                     if not should_create:
                         continue
@@ -824,7 +827,7 @@ class GoogleSheetManager:
                 if stage_index < len(sched_cols):
                     col_idx = sched_cols[stage_index]
                     
-                    # 1. 대상 스테이지 명확 업데이트 (예: P열 말고 J열, K열 등)
+                    # 1. 대상 스테이지 명확 업데이트
                     print(f"\n[AUTO-SCHEDULER] Setting Stage {stage_index+1} for Row {target_row} to {date_str} (Col {col_idx+1})")
                     try:
                         self.task_sheet.update_cell(target_row, col_idx + 1, date_str)
@@ -832,23 +835,28 @@ class GoogleSheetManager:
                         print(f"[AUTO-SCHEDULER] Error writing first base date! : {e}")
                     
                     if date_str:
-                        # 2. task_data থেকে periods 와 H value 파싱
-                        preset_str = ""
-                        h_val = ""
+                        # [복구] 필요한 정보 가져오기 (task_data가 불충분할 수 있으므로 시트 직접 참조)
+                        row_vals = self.task_sheet.row_values(target_row)
+                        preset_str = row_vals[self.COL_PRESET] if len(row_vals) > self.COL_PRESET else ""
                         
-                        if task_data:
-                            preset_str = str(task_data.get('period', ''))
-                            h_val = str(task_data.get('upload_count', ''))
-                            print(f"[AUTO-SCHEDULER] Using Memory Data - Preset: '{preset_str}', H-Val: '{h_val}'")
-                        else:
-                            try:
-                                row_vals = self.task_sheet.row_values(target_row)
-                                preset_str = str(row_vals[self.COL_PRESET]) if self.COL_PRESET < len(row_vals) else ""
-                                h_val = str(row_vals[self.COL_UPLOAD_CNT]) if self.COL_UPLOAD_CNT < len(row_vals) else ""
-                                print(f"[AUTO-SCHEDULER] API Fetched Data - Preset: '{preset_str}', H-Val: '{h_val}'")
-                            except Exception as api_err:
-                                print(f"[AUTO-SCHEDULER] Failed to fetch row values: {api_err}")
+                        # total_stages 계산
+                        preset_cnt = 1
+                        if preset_str:
+                            if "," in str(preset_str):
+                                preset_cnt = len(str(preset_str).split(','))
                         
+                        total_stages = preset_cnt
+                        try:
+                            h_val = str(row_vals[self.COL_UPLOAD_CNT]).strip() if len(row_vals) > self.COL_UPLOAD_CNT else ""
+                            if h_val:
+                                if h_val.isdigit():
+                                    total_stages = max(preset_cnt, int(h_val))
+                                elif '/' in h_val:
+                                    parts = h_val.split('/')
+                                    if len(parts) == 2 and parts[1].strip().isdigit():
+                                        total_stages = max(preset_cnt, int(parts[1].strip()))
+                        except:
+                            pass
                         periods = []
                         if preset_str:
                             if "," in preset_str:
@@ -856,56 +864,57 @@ class GoogleSheetManager:
                             else:
                                 periods = [preset_str.strip()]
                         
-                        print(f"[AUTO-SCHEDULER] Parsed Periods array: {periods}")
-                                
-                        current_date_obj = None
-                        try:
-                            norm_date = self._parse_date_robust(date_str)
-                            current_date_obj = datetime.strptime(norm_date, "%Y-%m-%d %H:%M") if len(norm_date) > 10 else datetime.strptime(norm_date, "%Y-%m-%d")
-                            print(f"[AUTO-SCHEDULER] Master Date parsed correctly: {current_date_obj}")
-                        except Exception as de:
-                            print(f"[AUTO-SCHEDULER] Date Parsing failed: {de}")
-                            return
+                        norm_date = self._parse_date_robust(date_str)
+                        current_date_obj = datetime.strptime(norm_date, "%Y-%m-%d %H:%M") if len(norm_date) > 10 else datetime.strptime(norm_date, "%Y-%m-%d")
                         
-                        if current_date_obj and periods:
-                            total_stages = len(periods)
+                        current_p_name = periods[stage_index] if stage_index < len(periods) else "2주"
+                        current_days = self.get_days_from_period(current_p_name)
+                        base_surgery_date = current_date_obj - timedelta(days=current_days)
+                        
+                        # 일괄 업데이트를 위한 리스트 준비 (J, K, L, M 열 값들)
+                        # [수정] 기존 시트의 값들을 먼저 복사하여 '완료' 등의 상태 보존
+                        update_values = [""] * 4
+                        for i in range(len(sched_cols)):
+                            c_idx = sched_cols[i]
+                            if c_idx < len(row_vals):
+                                update_values[i] = str(row_vals[c_idx])
+
+                        # 이미 완료된 스테이지들은 유지하거나, 현재 스테이지만 업데이트
+                        # 여기선 '연쇄 계산'이 목적이므로 현재 스테이지 이후를 채움
+                        for i in range(len(sched_cols)):
+                            if i < stage_index:
+                                continue # 이전 스테이지는 건드리지 않음 (상태 보존)
                             
-                            if h_val:
-                                if h_val.isdigit():
-                                    total_stages = max(len(periods), int(h_val))
-                                elif '/' in h_val:
-                                    parts = h_val.split('/')
-                                    if len(parts) == 2 and parts[1].strip().isdigit():
-                                        total_stages = max(len(periods), int(parts[1].strip()))
+                            # [수정] 총 횟수를 넘어가는 컬럼은 빈칸으로 처리 (정확한 동기화)
+                            if i >= total_stages:
+                                update_values[i] = ""
+                                continue
+
+                            # 현재 및 향후 스테이지 계산
+                            p_name = periods[i] if i < len(periods) else (periods[-1] if periods else "2주")
+                            days_offset = self.get_days_from_period(p_name)
+                            target_date = base_surgery_date + timedelta(days=days_offset)
                             
-                            print(f"[AUTO-SCHEDULER] Total computed stages: {total_stages}")
-                            
-                            current_p_name = periods[stage_index] if stage_index < len(periods) else "2주"
-                            current_days = self.get_days_from_period(current_p_name)
-                            base_surgery_date = current_date_obj - timedelta(days=current_days)
-                            print(f"[AUTO-SCHEDULER] Base surgery computed: {base_surgery_date} (Subtracted {current_days} days for {current_p_name})")
-                            
-                            for next_idx in range(stage_index + 1, total_stages):
-                                if next_idx >= len(sched_cols): break
-                                
-                                p_name = periods[next_idx] if next_idx < len(periods) else "2주"
-                                days_offset = self.get_days_from_period(p_name)
-                                next_target_date = base_surgery_date + timedelta(days=days_offset)
-                                
+                            if i == stage_index:
+                                # 입력받은 날짜 그대로 사용 (시간 보존)
+                                target_date_str = date_str
+                            else:
                                 # 시간 랜덤 설정
                                 rand_hour = random.randint(10, 20)
                                 rand_minute = random.randint(0, 59)
-                                next_target_date = next_target_date.replace(hour=rand_hour, minute=rand_minute)
+                                target_date = target_date.replace(hour=rand_hour, minute=rand_minute)
+                                target_date_str = target_date.strftime("%Y-%m-%d %H:%M")
                                 
-                                next_date_str = next_target_date.strftime("%Y-%m-%d %H:%M")
-                                target_col_idx = sched_cols[next_idx]
-                                
-                                print(f"[AUTO-SCHEDULER]   --> Writing Stage {next_idx+1} ({p_name}): {next_date_str} to Col {target_col_idx+1}")
-                                try:
-                                    self.task_sheet.update_cell(target_row, target_col_idx + 1, next_date_str)
-                                    print(f"[AUTO-SCHEDULER]       Success!")
-                                except Exception as exc:
-                                    print(f"[AUTO-SCHEDULER]       FAILED to write cell! {exc}")
+                            update_values[i] = target_date_str
+
+                        # 범위 지정 (J열 ~ M열) - J는 인덱스 9이므로 컬럼명 J=10, M=13
+                        range_name = f"J{target_row}:M{target_row}"
+                        try:
+                            # 2차원 배열 형태로 전달 [[val1, val2, val3, val4]]
+                            self.task_sheet.update(range_name, [update_values])
+                            print(f"[AUTO-SCHEDULER] Batch update Success for range {range_name}")
+                        except Exception as e:
+                            print(f"[AUTO-SCHEDULER] Batch update FAILED: {e}")
                     
                     # P열 (COL_NEXT_RUN) 쓰기 중단 (사용자 참조용 보호)
                     # try:
