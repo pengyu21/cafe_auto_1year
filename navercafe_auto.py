@@ -28,14 +28,28 @@ class NaverCafeBot:
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
         
+        import socket
+        port_in_use = False
         if port:
-            chrome_options.add_argument(f"--remote-debugging-port={port}")
-        if profile_dir:
-            chrome_options.add_argument(f"--user-data-dir={profile_dir}")
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = sock.connect_ex(('127.0.0.1', int(port)))
+            if result == 0:
+                port_in_use = True
+            sock.close()
+
+        if port_in_use:
+            print(f"DEBUG: Port {port} is already open. Attaching to existing browser.")
+            chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
+        else:
+            if port:
+                chrome_options.add_argument(f"--remote-debugging-port={port}")
+            if profile_dir:
+                chrome_options.add_argument(f"--user-data-dir={profile_dir}")
         
         self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
         self.driver.implicitly_wait(2) # 10 -> 2로 단축 (속도 개선)
-        self.driver.maximize_window()
+        if not port_in_use:
+            self.driver.maximize_window()
 
     def close_browser(self):
         if self.driver:
@@ -88,6 +102,7 @@ class NaverCafeBot:
 
     def login(self, user_id, user_pw):
         """네이버 로그인 (세션 유효 시 스킵)"""
+        assert self.driver is not None
         try:
             print(f"DEBUG: Login check started for {user_id}")
             
@@ -109,22 +124,25 @@ class NaverCafeBot:
 
             # 1. 네이버 메인 접속하여 로그인 여부 확인
             self.driver.get("https://www.naver.com")
-            time.sleep(2)
+            time.sleep(1) # 쿠키 로드 시간 약간
             
-            # 로그아웃 버튼이 있거나, 프로필 영역이 있으면 로그인 된 상태
-            # 보통 class="btn_logout" or text="로그아웃"
-            try:
-                logout_btn = self.driver.find_element(By.CLASS_NAME, "btn_logout")
-                print(f"이미 로그인 되어 있습니다. (ID: {user_id})")
+            # 쿠키 확인 (NID_SES 속성이 있으면 로그인 된 상태)
+            cookies = self.driver.get_cookies()
+            has_nid_ses = any(cookie.get('name') == 'NID_SES' for cookie in cookies)
+            
+            if has_nid_ses:
+                print(f"이미 로그인 되어 있습니다. (NID_SES 쿠키 확인됨, ID: {user_id})")
                 return True
-            except:
-                pass
                 
-            # 로그인 안되어있으면 로그인 페이지로
+            # 쿠키로 못 찾거나 로그인이 안되어있으면 로그인 페이지로 이동
             self.driver.get("https://nid.naver.com/nidlogin.login")
             time.sleep(2)
+            
+            # 이미 로그인 되어 있는지 재확인 (로그인 페이지 접근 시 자동 리다이렉트 됨)
+            if "nid.naver.com/nidlogin.login" not in self.driver.current_url:
+                print("이미 로그인 되어 있습니다. (리다이렉트 됨)")
+                return True
 
-            # 이미 로그인 되어 있는지 재확인 (혹시 리다이렉트 안됨?)
             try:
                 id_input = self.driver.find_element(By.ID, "id")
             except:
@@ -144,12 +162,12 @@ class NaverCafeBot:
             pw_input.send_keys(Keys.CONTROL, 'v')
             time.sleep(1)
 
-            # 로그인 상태 유지 체크 (브라우저 종료 후에도 세션 유지)
+            # 로그인 상태 유지 체크 (JS 클릭으로 강제 적용하여 오작동 방지)
             try:
                 keep_checkbox = self.driver.find_element(By.ID, "keep")
                 if not keep_checkbox.is_selected():
-                    # 커스텀 체크박스 UI이므로 label을 클릭하여 활성화
-                    self.driver.find_element(By.XPATH, "//label[@for='keep']").click()
+                    keep_label = self.driver.find_element(By.XPATH, "//label[@for='keep']")
+                    self.driver.execute_script("arguments[0].click();", keep_label)
                     time.sleep(0.5)
             except Exception as e:
                 print(f"로그인 상태 유지 체크박스 처리 실패 (무시됨): {e}")
@@ -187,6 +205,7 @@ class NaverCafeBot:
 
     def navigate_to_cafe(self, cafe_url):
         """카페 접속"""
+        assert self.driver is not None
         try:
             self.driver.get(cafe_url)
             time.sleep(2)
@@ -372,6 +391,7 @@ class NaverCafeBot:
         """글쓰기 실행 (공개설정: 전체공개 추가)
         content_list: [{'type': 'text'|'image', 'value': '...'}, ...] 순서대로 작성
         """
+        assert self.driver is not None
         try:
             # iframe 전환 (글쓰기 버튼 누른 후 에디터는 보통 iframe 안에 있음)
             self.driver.switch_to.default_content()
@@ -414,17 +434,23 @@ class NaverCafeBot:
                             pass
                             
                     if btn:
-                        current_handles = self.driver.window_handles
-                        btn.click()
+                        # [창 1개만 쓰는 로직으로 변경]
+                        # btn.click() 시 새 창이 뜨지 않도록 href를 추출하여 현재 탭에서 직접 이동
+                        href = btn.get_attribute("href")
                         
-                        # 새 창/탭 대기 및 전환 (단 한번만 실행)
-                        time.sleep(3)
-                        new_handles = self.driver.window_handles
-                        if len(new_handles) > len(current_handles):
-                             self.driver.switch_to.window(new_handles[-1])
-                             print(f"새 글쓰기 창으로 전환되었습니다. (Handle: {self.driver.current_window_handle})")
+                        self.driver.switch_to.default_content() # 최상위로 빠져나옴
+                        
+                        if href and "javascript" not in href and href != "#":
+                            print(f"새 창을 띄우지 않고 글쓰기 페이지로 직접 이동합니다: {href}")
+                            self.driver.get(href)
                         else:
-                            print("기존 창에서 에디터가 열렸습니다. (Inline Mode)")
+                            print("href가 없으므로 target='_blank'를 속성에서 제거하고 클릭합니다.")
+                            try:
+                                self.driver.execute_script("arguments[0].removeAttribute('target');", btn)
+                            except: pass
+                            btn.click()
+                        
+                        time.sleep(5) # 페이지 이동 대기
                         break # 성공 시 루프 탈출
                         
                     else:
@@ -446,33 +472,56 @@ class NaverCafeBot:
                         pass
             
             # 스마트에디터 로딩 대기
-            time.sleep(5)
-
-            
-            time.sleep(3)
-
-            # 스마트에디터 로딩 대기
-            time.sleep(5) 
-
-            # 스마트에디터 로딩 대기
             time.sleep(5) 
             
-            # 제목 입력
-            # 스마트에디터 ONE 기준
+            # [중요] 단일 창 모드에서는 에디터가 iframe이 아닌 최상위에 로드될 가능성이 높음
+            self.driver.switch_to.default_content()
+            
+            title_area = None
+            
+            # 1. 1차 시도: 최상위 DOM에서 찾기
             try:
+                print("최상위 DOM에서 제목 입력란을 탐색합니다...")
                 title_area = WebDriverWait(self.driver, 5).until(
-                    EC.presence_of_element_located((By.CLASS_NAME, "textarea_input"))
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "textarea.textarea_input, .ArticleWritingTitle textarea"))
                 )
-                title_area.click()
-                title_area.send_keys(title)
-                time.sleep(1)
             except:
-                # 구버전 등
+                pass
+                
+            # 2. 2차 시도: cafe_main 프레임 안에서 찾기
+            if not title_area:
                 try:
-                    title_input = self.driver.find_element(By.ID, "subject")
-                    title_input.send_keys(title)
+                    print("최상위에서 못 찾음. cafe_main 프레임 안에서 다시 시도합니다...")
+                    WebDriverWait(self.driver, 2).until(EC.frame_to_be_available_and_switch_to_it("cafe_main"))
+                    title_area = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "textarea.textarea_input, .ArticleWritingTitle textarea"))
+                    )
                 except:
-                    print("제목 입력란을 찾을 수 없습니다.")
+                    pass
+
+            if title_area:
+                try:
+                    title_area.click()
+                    title_area.clear() # 기존 텍스트(예: "제목을 입력해 주세요.")가 남아있을 수 있으므로 클리어
+                    
+                    # 이모지(BMP 외부 문자) 등 send_keys()가 미지원하는 문자열을 위해 클립보드 붙여넣기 사용
+                    pyperclip.copy(title)
+                    title_area.send_keys(Keys.CONTROL, 'v')
+                    time.sleep(1)
+                except Exception as e:
+                    print(f"제목 입력 (클립보드 붙여넣기) 실패: {e}")
+            else:
+                print("제목 검색 1, 2차 모두 실패. 구버전 에디터(subject)로 시도합니다.")
+                try:
+                    self.driver.switch_to.default_content()
+                    try:
+                        self.driver.switch_to.frame("cafe_main")
+                    except: pass
+                    title_input = self.driver.find_element(By.ID, "subject")
+                    pyperclip.copy(title)
+                    title_input.send_keys(Keys.CONTROL, 'v')
+                except Exception as e:
+                    print(f"구버전 제목란도 찾을 수 없습니다: {e}")
 
             time.sleep(1)
 

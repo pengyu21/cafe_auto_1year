@@ -453,11 +453,11 @@ class CalendarDialog(QDialog):
             task_dict[date_str].append(t)
             
         first_day = QDate(self.current_date.year(), self.current_date.month(), 1)
-        first_day_of_week = first_day.dayOfWeek() % 7 # 0 is Sunday
+        first_day_of_week = int(first_day.dayOfWeek()) % 7 # 0 is Sunday
         
-        row = 1
-        col = first_day_of_week
-        days_in_month = self.current_date.daysInMonth()
+        row: int = 1
+        col: int = first_day_of_week
+        days_in_month = int(self.current_date.daysInMonth())
         
         # Draw blanks before first day
         for c in range(col):
@@ -793,6 +793,38 @@ class MainApp(QMainWindow):
         top_layout.addWidget(self.btn_calendar, 1) 
         
         layout.addLayout(top_layout)
+
+        # 6. 사전 로그인 (브라우저 열기) 포트 설정
+        port_layout = QHBoxLayout()
+        port_layout.setSpacing(10)
+        
+        lbl_prelogin = QLabel("🔑 사전 로그인 (수동 브라우저 열기):")
+        port_layout.addWidget(lbl_prelogin)
+        
+        lbl_id = QLabel("아이디:")
+        port_layout.addWidget(lbl_id)
+        
+        self.combo_prep_id = QComboBox()
+        self.combo_prep_id.setMinimumWidth(150)
+        self.combo_prep_id.setEditable(True)
+        self.combo_prep_id.currentTextChanged.connect(self.on_prep_id_changed)
+        port_layout.addWidget(self.combo_prep_id)
+        
+        lbl_port = QLabel("포트:")
+        port_layout.addWidget(lbl_port)
+        
+        self.line_prep_port = QLineEdit("9222")
+        self.line_prep_port.setFixedWidth(60)
+        port_layout.addWidget(self.line_prep_port)
+        
+        self.btn_open_browser = QPushButton(" 브라우저 열기")
+        self.btn_open_browser.setCursor(Qt.PointingHandCursor)
+        self.btn_open_browser.setStyleSheet("background-color: #8e44ad; color: white; font-weight: bold; border-radius: 4px; padding: 5px 15px;")
+        self.btn_open_browser.clicked.connect(self.open_prep_browser)
+        port_layout.addWidget(self.btn_open_browser)
+        
+        port_layout.addStretch()
+        layout.addLayout(port_layout)
         
         # 메인: 스플리터
         splitter = QSplitter(Qt.Horizontal)
@@ -1141,12 +1173,37 @@ class MainApp(QMainWindow):
                     scheduled_rows.append((i, task))
             
             # ID 정렬 리스트 생성 (포트 매핑용)
-            all_ids = sorted(list(set([t['id'] for t in self.tasks if t['id']])))
+            self.all_prep_ids = sorted(list(set([t['id'] for t in self.tasks if t['id']])))
+            
+            # ID를 이름에 매핑
+            id_to_name = {}
+            for t in self.tasks:
+                if t['id'] and t['id'] not in id_to_name:
+                    id_to_name[t['id']] = t.get('name', '이름없음')
+
+            # 사전 로그인 콤보박스 업데이트
+            current_prep_data = self.combo_prep_id.currentData()
+            self.combo_prep_id.blockSignals(True)
+            self.combo_prep_id.clear()
+            
+            for uid in self.all_prep_ids:
+                display_text = f"{id_to_name[uid]} ({uid})"
+                self.combo_prep_id.addItem(display_text, userData=uid)
+                
+            if current_prep_data in self.all_prep_ids:
+                idx = self.combo_prep_id.findData(current_prep_data)
+                if idx >= 0:
+                     self.combo_prep_id.setCurrentIndex(idx)
+            elif self.all_prep_ids:
+                self.combo_prep_id.setCurrentIndex(0)
+                self.on_prep_id_changed(0)
+                
+            self.combo_prep_id.blockSignals(False)
 
             # 테이블 채우기
-            self.fill_table(self.table_ready, ready_rows, all_ids)
-            self.fill_table(self.table_scheduled, scheduled_rows, all_ids)
-            self.fill_table(self.table_completed, completed_rows, all_ids)
+            self.fill_table(self.table_ready, ready_rows, self.all_prep_ids)
+            self.fill_table(self.table_scheduled, scheduled_rows, self.all_prep_ids)
+            self.fill_table(self.table_completed, completed_rows, self.all_prep_ids)
                 
             self.log(f"대기중: {len(ready_rows)}개, 예약됨: {len(scheduled_rows)}개, 완료됨: {len(completed_rows)}개 불러오기 완료.")
             self.btn_start.setEnabled(True)
@@ -1570,6 +1627,46 @@ class MainApp(QMainWindow):
             return
         dlg = CalendarDialog(self.tasks, self)
         dlg.exec()
+
+    def on_prep_id_changed(self, index):
+        if not hasattr(self, 'all_prep_ids') or index < 0:
+            return
+        uid = self.combo_prep_id.itemData(index)
+        if not uid:
+            return
+            
+        try:
+            port_idx = self.all_prep_ids.index(uid)
+            port = 9222 + port_idx
+        except:
+            port = 9222
+        self.line_prep_port.setText(str(port))
+        
+    def open_prep_browser(self):
+        uid = self.combo_prep_id.currentData()
+        port_str = self.line_prep_port.text().strip()
+        if not uid or not port_str.isdigit():
+            QMessageBox.warning(self, "경고", "아이디를 확인하고 숫자 형태의 포트 번호를 입력하세요.")
+            return
+            
+        port = int(port_str)
+        profile_dir = os.path.abspath(os.path.join(os.path.expanduser("~"), "navercafe_profiles", uid))
+        
+        self.log(f">>> 사전 로그인용 브라우저를 엽니다 (ID: {uid}, Port: {port})")
+        self.log(f"    브라우저가 열리면 수동으로 [로그인 상태 유지]를 꼭 체크하고 로그인해주세요.")
+        self.log(f"    로그인 후 브라우저를 그대로 두셔도 자동 지원되며, 닫아도 세션이 유지됩니다.")
+        
+        # 백그라운드 스레드에서 브라우저 열기 (GUI 멈춤 방지)
+        threading.Thread(target=self._run_prep_browser, args=(port, profile_dir)).start()
+        
+    def _run_prep_browser(self, port, profile_dir):
+        try:
+            bot = NaverCafeBot()
+            bot.start_browser(port=port, profile_dir=profile_dir)
+            bot.driver.get("https://nid.naver.com/nidlogin.login")
+            self.update_log_signal(">>> 브라우저 실행 완료. 로그인 완료 후 창을 닫거나 그대로 두시면 됩니다.")
+        except Exception as e:
+            self.update_log_signal(f"수동 브라우저 실행 중 에러 (크롬 프로세스가 이미 실행중인지 확인하세요): {e}")
 
     def run_process(self, indices):
         """수동 실행용"""
