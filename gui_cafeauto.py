@@ -1737,17 +1737,20 @@ class MainApp(QMainWindow):
             current_retries = self.task_retry_counts.get(task_id_key, 0)
             
             if current_retries >= 2:
-                self.update_log_signal(f"[{task['name']}] 2회 이상 실패하여 해당 일정을 스킵(취소)합니다.")
-                task['next_run'] = ""
-                self.sheet_mgr.update_date_manual(task['row_index'], "", task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
+                self.update_log_signal(f"[{task['name']}] 2회 이상 실패하여 해당 일정 칸에 에러 사유를 기록합니다.")
+                
+                # J:M 일정 칸에 에러 사유 쓰기
+                error_label = f"에러: {msg}"
+                if len(error_label) > 15:
+                    error_label = error_label[:15] + ".."
+                    
+                task['next_run'] = error_label
+                self.sheet_mgr.update_date_manual(task['row_index'], error_label, task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
                 self.task_retry_counts[task_id_key] = 0 # 리셋
             else:
                 self.task_retry_counts[task_id_key] = current_retries + 1
                 self.update_log_signal(f"[{task['name']}] 예약 일정은 유지됩니다. ({self.task_retry_counts[task_id_key]}/2회 재시도 실패)")
-                # 에러 원인 수정 시 다음 스케줄러 루프에서 재시도됨
-            self.update_log_signal(f"[{task['name']}] 예약 일정은 유지됩니다. 에러 원인(파일, 계정 등)을 수정하시면 재시도됩니다.")
-            # task['next_run'] = ""
-            # self.sheet_mgr.update_date_manual(task['row_index'], "", task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
+                self.update_log_signal(f"  -> 일시적 오류일 경우 다음 실행 시 재시도됩니다.")
         
         # 1. 로그인
         if not bot.login(task['id'], task['pw']):
@@ -1847,7 +1850,7 @@ class MainApp(QMainWindow):
         else:
             # 기존 로직 (folder_data is body string)
             folder_body = folder_data
-            final_title = folder_title if folder_title else "(제목없음)"
+            final_title = folder_title if folder_title else task.get('title', "(제목없음)")
             
             # 폴더 본문이 있고, 컬럼 본문이 없으면 폴더 본문 사용
             if folder_body and not stage_body:

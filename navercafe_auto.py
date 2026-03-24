@@ -122,26 +122,28 @@ class NaverCafeBot:
             else:
                 print("DEBUG: Not on Naver page, navigating...")
 
-            # 1. 네이버 메인 접속하여 로그인 여부 확인
-            self.driver.get("https://www.naver.com")
-            time.sleep(1) # 쿠키 로드 시간 약간
-            
-            # 쿠키 확인 (NID_SES 속성이 있으면 로그인 된 상태)
+            # 0. 현재 네이버 도메인이 아니라면 쿠키를 읽을 수 없으므로 가벼운 네이버 도메인으로 먼저 이동
+            curr_url = self.driver.current_url
+            if not curr_url or "naver.com" not in curr_url:
+                self.driver.set_page_load_timeout(10)
+                try:
+                    self.driver.get("https://cafe.naver.com") # 로그인 창이 아닌 평범한 카페 메인으로 이동
+                except:
+                    pass
+                time.sleep(1)
+                
+            # 1. 즉시 쿠키(NID_SES) 확인 (네이버 도메인에서만 읽기 가능)
             cookies = self.driver.get_cookies()
             has_nid_ses = any(cookie.get('name') == 'NID_SES' for cookie in cookies)
             
             if has_nid_ses:
-                print(f"이미 로그인 되어 있습니다. (NID_SES 쿠키 확인됨, ID: {user_id})")
+                print(f"이미 로그인 되어 있습니다. (로직 스킵, ID: {user_id})")
                 return True
                 
-            # 쿠키로 못 찾거나 로그인이 안되어있으면 로그인 페이지로 이동
+            # 2. 쿠키가 없다면(로그인 안된 상태라면) 그때서야 로그인 페이지로 진입
+            print("로그인이 필요하여 로그인 페이지로 이동합니다.")
             self.driver.get("https://nid.naver.com/nidlogin.login")
             time.sleep(2)
-            
-            # 이미 로그인 되어 있는지 재확인 (로그인 페이지 접근 시 자동 리다이렉트 됨)
-            if "nid.naver.com/nidlogin.login" not in self.driver.current_url:
-                print("이미 로그인 되어 있습니다. (리다이렉트 됨)")
-                return True
 
             try:
                 id_input = self.driver.find_element(By.ID, "id")
@@ -152,14 +154,14 @@ class NaverCafeBot:
             # 아이디 입력
             id_input.click()
             pyperclip.copy(user_id)
-            id_input.send_keys(Keys.CONTROL, 'v')
+            webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
             time.sleep(1)
 
             # 비밀번호 입력
             pw_input = self.driver.find_element(By.ID, "pw")
             pw_input.click()
             pyperclip.copy(user_pw)
-            pw_input.send_keys(Keys.CONTROL, 'v')
+            webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
             time.sleep(1)
 
             # 로그인 상태 유지 체크 (JS 클릭으로 강제 적용하여 오작동 방지)
@@ -506,7 +508,7 @@ class NaverCafeBot:
                     
                     # 이모지(BMP 외부 문자) 등 send_keys()가 미지원하는 문자열을 위해 클립보드 붙여넣기 사용
                     pyperclip.copy(title)
-                    title_area.send_keys(Keys.CONTROL, 'v')
+                    webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
                     time.sleep(1)
                 except Exception as e:
                     print(f"제목 입력 (클립보드 붙여넣기) 실패: {e}")
@@ -518,8 +520,9 @@ class NaverCafeBot:
                         self.driver.switch_to.frame("cafe_main")
                     except: pass
                     title_input = self.driver.find_element(By.ID, "subject")
+                    title_input.click()
                     pyperclip.copy(title)
-                    title_input.send_keys(Keys.CONTROL, 'v')
+                    webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
                 except Exception as e:
                     print(f"구버전 제목란도 찾을 수 없습니다: {e}")
 
@@ -929,8 +932,11 @@ class NaverCafeBot:
                 return True
                 
             # 다른 스테이지 이름이 포함되어 있으면 탈락
+            curr_base = current_stage_name.replace("차", "") if current_stage_name else ""
             for ks in known_stages:
-                if current_stage_name and ks == current_stage_name: continue
+                ks_base = ks.replace("차", "")
+                if curr_base and ks_base == curr_base: 
+                    continue
                 if ks in fname:
                     return False
             return True
