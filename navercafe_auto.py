@@ -167,10 +167,16 @@ class NaverCafeBot:
             # 로그인 상태 유지 체크 (JS 클릭으로 강제 적용하여 오작동 방지)
             try:
                 keep_checkbox = self.driver.find_element(By.ID, "keep")
-                if not keep_checkbox.is_selected():
-                    keep_label = self.driver.find_element(By.XPATH, "//label[@for='keep']")
-                    self.driver.execute_script("arguments[0].click();", keep_label)
-                    time.sleep(0.5)
+                
+                if keep_checkbox.tag_name == "div":
+                    if keep_checkbox.get_attribute("aria-checked") == "false":
+                        self.driver.execute_script("arguments[0].click();", keep_checkbox)
+                        time.sleep(0.5)
+                else:
+                    if not keep_checkbox.is_selected():
+                        keep_label = self.driver.find_element(By.XPATH, "//label[@for='keep']")
+                        self.driver.execute_script("arguments[0].click();", keep_label)
+                        time.sleep(0.5)
             except Exception as e:
                 print(f"로그인 상태 유지 체크박스 처리 실패 (무시됨): {e}")
 

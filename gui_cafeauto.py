@@ -561,13 +561,13 @@ class TaskLoaderThread(QThread):
             self.errorOccurred.emit(str(e))
 
 
-__version__ = "1.1.3"
+__version__ = "1.1.4"
 
 class MainApp(QMainWindow):
     def __init__(self):
         super().__init__()
         # App Info
-        self.setWindowTitle('네이버 카페 자동 포스팅 (Naver Cafe Auto) v1.1.3')
+        self.setWindowTitle(f'네이버 카페 자동 포스팅 (Naver Cafe Auto) v{__version__}')
         self.resize(1500, 850) # 넓이 조정 (1300 -> 1500)
         
         self.sheet_mgr = GoogleSheetManager()
@@ -805,9 +805,9 @@ class MainApp(QMainWindow):
         port_layout.addWidget(lbl_id)
         
         self.combo_prep_id = QComboBox()
-        self.combo_prep_id.setMinimumWidth(150)
+        self.combo_prep_id.setMinimumWidth(250)
         self.combo_prep_id.setEditable(True)
-        self.combo_prep_id.currentTextChanged.connect(self.on_prep_id_changed)
+        self.combo_prep_id.currentIndexChanged.connect(self.on_prep_id_changed)
         port_layout.addWidget(self.combo_prep_id)
         
         lbl_port = QLabel("포트:")
@@ -1172,22 +1172,35 @@ class MainApp(QMainWindow):
                 else:
                     scheduled_rows.append((i, task))
             
-            # ID 정렬 리스트 생성 (포트 매핑용)
+            # ID 정렬 리스트 생성 (포트 매핑용 기준)
             self.all_prep_ids = sorted(list(set([t['id'] for t in self.tasks if t['id']])))
             
-            # ID를 이름에 매핑
-            id_to_name = {}
+            # ID를 이름에 매핑 및 A열 번호(no) 매핑
+            id_to_info = {}
             for t in self.tasks:
-                if t['id'] and t['id'] not in id_to_name:
-                    id_to_name[t['id']] = t.get('name', '이름없음')
+                if t['id'] and t['id'] not in id_to_info:
+                    no_val = 0
+                    try:
+                        no_val = int(str(t.get('no', '0')).strip())
+                    except:
+                        no_val = 0
+                    id_to_info[t['id']] = {'name': t.get('name', '이름없음'), 'no': no_val}
 
             # 사전 로그인 콤보박스 업데이트
             current_prep_data = self.combo_prep_id.currentData()
             self.combo_prep_id.blockSignals(True)
             self.combo_prep_id.clear()
             
+            # 콤보박스 아이템용 리스트 생성 및 A열 기준 오름차순 정렬
+            combo_items = []
             for uid in self.all_prep_ids:
-                display_text = f"{id_to_name[uid]} ({uid})"
+                info = id_to_info[uid]
+                display_text = f"[{info['no']}] {info['name']} ({uid})"
+                combo_items.append((info['no'], display_text, uid))
+                
+            combo_items.sort(key=lambda x: x[0], reverse=False)
+            
+            for _, display_text, uid in combo_items:
                 self.combo_prep_id.addItem(display_text, userData=uid)
                 
             if current_prep_data in self.all_prep_ids:
@@ -1216,6 +1229,16 @@ class MainApp(QMainWindow):
             # 스케줄러 기본값 ON (자동 시작 - 사용자 요청 복구)
             self.set_scheduler_mode(True)
 
+            # 포트 번호 일괄 시트 업데이트 (백그라운드)
+            port_updates = {}
+            for t in self.tasks:
+                if t['id'] in self.all_prep_ids:
+                    p_idx = self.all_prep_ids.index(t['id'])
+                    port = 9222 + p_idx
+                    port_updates[t['row_index']] = port
+                    
+            if port_updates:
+                threading.Thread(target=self.sheet_mgr.update_ports_bulk, args=(port_updates,), daemon=True).start()
 
             
         except Exception as e:

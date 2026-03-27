@@ -73,9 +73,10 @@ class GoogleSheetManager:
         # Assuming mapping will fix this, but setting safer defaults.
         # Let's assume Title is moved or mapping will find it.
         # self.COL_TITLE = 13 
-        self.COL_URL = 14      # O
-        self.COL_NEXT_RUN = 15 # P
-        self.COL_UPLOAD_TIME = 16 # Q
+        self.COL_PORT = 14     # O
+        self.COL_URL = 15      # P
+        self.COL_NEXT_RUN = 16 # Q
+        self.COL_UPLOAD_TIME = 17 # R
         
         # Auto Map Columns
         self._map_columns()
@@ -164,7 +165,8 @@ class GoogleSheetManager:
                 'COL_TITLE': ['제목', 'Title'],
                 'COL_REMAIN_CNT': ['남은', 'Remain'], # 'Count' removed to avoid conflict with Upload Count
                 'COL_URL': ['URL', '링크', '주소'],
-                'COL_NEXT_RUN': ['다음예약', 'Next Run', '예약일']
+                'COL_NEXT_RUN': ['다음예약', 'Next Run', '예약일'],
+                'COL_PORT': ['포트', 'Port']
             }
 
             # 상위 5행 중 헤더(키워드가 많이 포함된 행) 찾기
@@ -647,6 +649,25 @@ class GoogleSheetManager:
         except Exception as e:
             print(f"Error resetting task row {row_index}: {e}")
             return False
+
+    def update_ports_bulk(self, port_updates):
+        """포트 번호를 일괄 업데이트 (API 1회 호출)
+        port_updates: dict {row_index: port_number}
+        """
+        try:
+            cells_to_update = []
+            for row_idx, port_num in port_updates.items():
+                a1_range = gspread.utils.rowcol_to_a1(row_idx, self.COL_PORT + 1)
+                cells_to_update.append({
+                    'range': a1_range,
+                    'values': [[str(port_num)]]
+                })
+            
+            if cells_to_update:
+                self.task_sheet.batch_update(cells_to_update)
+                print(f"Updated {len(cells_to_update)} port numbers in Google Sheet.")
+        except Exception as e:
+            print(f"Error updating ports: {e}")
 
     def force_complete_task(self, row_index, task_id=None):
         """작업을 강제로 완료 처리"""
