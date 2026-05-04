@@ -26,7 +26,11 @@ class NaverCafeBot:
         chrome_options = Options()
         # chrome_options.add_argument("--headless") # 디버깅을 위해 헤드리스 끔
         chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+        
+        # [봇 탐지 우회 옵션 추가]
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option("useAutomationExtension", False)
         
         import socket
         port_in_use = False

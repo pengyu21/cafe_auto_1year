@@ -561,7 +561,7 @@ class TaskLoaderThread(QThread):
             self.errorOccurred.emit(str(e))
 
 
-__version__ = "1.1.4"
+__version__ = "1.1.5"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -822,6 +822,10 @@ class MainApp(QMainWindow):
         self.btn_open_browser.setStyleSheet("background-color: #8e44ad; color: white; font-weight: bold; border-radius: 4px; padding: 5px 15px;")
         self.btn_open_browser.clicked.connect(self.open_prep_browser)
         port_layout.addWidget(self.btn_open_browser)
+        
+        self.lbl_profile_path = QLabel("")
+        self.lbl_profile_path.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
+        port_layout.addWidget(self.lbl_profile_path)
         
         port_layout.addStretch()
         layout.addLayout(port_layout)
@@ -1573,7 +1577,7 @@ class MainApp(QMainWindow):
                                 port = 9222
                                 
                             # 공유 폴더 충돌 방지를 위해 로컬 사용자 폴더 내에 크롬 프로필 생성
-                            profile_dir = os.path.abspath(os.path.join(os.path.expanduser("~"), "navercafe_profiles", uid))
+                            profile_dir = os.path.abspath(os.path.join(r"C:\Users\데스크1", "navercafe_profiles", uid))
                             
                             self.update_log_signal(f"브라우저 실행 (ID: {uid}, Port: {port})")
                             current_bot = NaverCafeBot()
@@ -1665,6 +1669,11 @@ class MainApp(QMainWindow):
             port = 9222
         self.line_prep_port.setText(str(port))
         
+        # UI에 현재 경로 표시
+        profile_dir = os.path.abspath(os.path.join(r"C:\Users\데스크1", "navercafe_profiles", uid))
+        if hasattr(self, 'lbl_profile_path'):
+            self.lbl_profile_path.setText(f"(캐시: {profile_dir})")
+        
     def open_prep_browser(self):
         uid = self.combo_prep_id.currentData()
         port_str = self.line_prep_port.text().strip()
@@ -1673,7 +1682,7 @@ class MainApp(QMainWindow):
             return
             
         port = int(port_str)
-        profile_dir = os.path.abspath(os.path.join(os.path.expanduser("~"), "navercafe_profiles", uid))
+        profile_dir = os.path.abspath(os.path.join(r"C:\Users\데스크1", "navercafe_profiles", uid))
         
         self.log(f">>> 사전 로그인용 브라우저를 엽니다 (ID: {uid}, Port: {port})")
         self.log(f"    브라우저가 열리면 수동으로 [로그인 상태 유지]를 꼭 체크하고 로그인해주세요.")
@@ -1684,12 +1693,38 @@ class MainApp(QMainWindow):
         
     def _run_prep_browser(self, port, profile_dir):
         try:
-            bot = NaverCafeBot()
-            bot.start_browser(port=port, profile_dir=profile_dir)
-            bot.driver.get("https://nid.naver.com/nidlogin.login")
-            self.update_log_signal(">>> 브라우저 실행 완료. 로그인 완료 후 창을 닫거나 그대로 두시면 됩니다.")
+            import subprocess
+            import os
+            
+            # 시스템에 설치된 실제 크롬 브라우저 경로 찾기
+            chrome_paths = [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                os.path.join(os.environ.get('LOCALAPPDATA', ''), r"Google\Chrome\Application\chrome.exe")
+            ]
+            
+            actual_chrome_path = None
+            for path in chrome_paths:
+                if os.path.exists(path):
+                    actual_chrome_path = path
+                    break
+                    
+            if not actual_chrome_path:
+                self.update_log_signal("수동 브라우저 실행 실패: 시스템에서 크롬을 찾을 수 없습니다.")
+                return
+                
+            # 셀레니움을 완전히 배제하고 순수 크롬을 직접 실행
+            cmd = [
+                actual_chrome_path,
+                f"--user-data-dir={profile_dir}",
+                "https://nid.naver.com/nidlogin.login"
+            ]
+            
+            subprocess.Popen(cmd)
+            self.update_log_signal(">>> [순수 크롬] 브라우저 실행 완료. 로그인 완료 후 창을 닫아주세요.")
+            
         except Exception as e:
-            self.update_log_signal(f"수동 브라우저 실행 중 에러 (크롬 프로세스가 이미 실행중인지 확인하세요): {e}")
+            self.update_log_signal(f"수동 브라우저 실행 중 에러: {e}")
 
     def run_process(self, indices):
         """수동 실행용"""
@@ -1718,7 +1753,7 @@ class MainApp(QMainWindow):
                         port = 9222
                         
                     # 공유 폴더 충돌 방지를 위해 로컬 사용자 폴더 내에 크롬 프로필 생성
-                    profile_dir = os.path.abspath(os.path.join(os.path.expanduser("~"), "navercafe_profiles", uid))
+                    profile_dir = os.path.abspath(os.path.join(r"C:\Users\데스크1", "navercafe_profiles", uid))
                     
                     self.update_log_signal(f"브라우저 실행 (ID: {uid}, Port: {port})")
                     current_bot = NaverCafeBot()
