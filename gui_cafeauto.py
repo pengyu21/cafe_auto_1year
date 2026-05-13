@@ -1584,10 +1584,8 @@ class MainApp(QMainWindow):
                             current_bot.start_browser(port=port, profile_dir=profile_dir)
                             current_user_id = uid
                         
-                        # 랜덤 지연
-                        delay_sec = random.randint(10, 60) 
-                        self.update_log_signal(f"[{task['name']}] 작업 대기 중... ({delay_sec}초)")
-                        time.sleep(delay_sec)
+                        # 랜덤 지연 제거 (즉시 실행)
+                        self.update_log_signal(f"[{task['name']}] 작업을 시작합니다.")
                         
                         if not self.scheduler_running: break
 
@@ -1595,7 +1593,8 @@ class MainApp(QMainWindow):
                         self.process_single_task(current_bot, task)
 
                     except Exception as e:
-                        self.update_log_signal(f"작업 중 오류 발생: {e}")
+                        error_msg = f"작업 중 오류 발생: {e}"
+                        self.handle_task_error(task, error_msg)
                         # 에러 발생 시 현재 브라우저 세션 초기화 (좀비 세션 방지)
                         if current_bot:
                             try:
@@ -1670,7 +1669,7 @@ class MainApp(QMainWindow):
         self.line_prep_port.setText(str(port))
         
         # UI에 현재 경로 표시
-        profile_dir = os.path.abspath(os.path.join(r"C:\Users\데스크1", "navercafe_profiles", uid))
+        profile_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "chrome_profiles", uid))
         if hasattr(self, 'lbl_profile_path'):
             self.lbl_profile_path.setText(f"(캐시: {profile_dir})")
         
@@ -1682,7 +1681,7 @@ class MainApp(QMainWindow):
             return
             
         port = int(port_str)
-        profile_dir = os.path.abspath(os.path.join(r"C:\Users\데스크1", "navercafe_profiles", uid))
+        profile_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "chrome_profiles", uid))
         
         self.log(f">>> 사전 로그인용 브라우저를 엽니다 (ID: {uid}, Port: {port})")
         self.log(f"    브라우저가 열리면 수동으로 [로그인 상태 유지]를 꼭 체크하고 로그인해주세요.")
@@ -1717,6 +1716,9 @@ class MainApp(QMainWindow):
             cmd = [
                 actual_chrome_path,
                 f"--user-data-dir={profile_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-sync",
                 "https://nid.naver.com/nidlogin.login"
             ]
             
@@ -1753,7 +1755,7 @@ class MainApp(QMainWindow):
                         port = 9222
                         
                     # 공유 폴더 충돌 방지를 위해 로컬 사용자 폴더 내에 크롬 프로필 생성
-                    profile_dir = os.path.abspath(os.path.join(r"C:\Users\데스크1", "navercafe_profiles", uid))
+                    profile_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "chrome_profiles", uid))
                     
                     self.update_log_signal(f"브라우저 실행 (ID: {uid}, Port: {port})")
                     current_bot = NaverCafeBot()
@@ -1764,11 +1766,17 @@ class MainApp(QMainWindow):
                 self.process_single_task(current_bot, task)
                 
         except Exception as e:
-            self.update_log_signal(f"작업 중 오류 발생: {e}")
-            
-        finally:
-            if current_bot:
+            error_msg = f"작업 중 오류 발생: {e}"
+            try:
+                self.handle_task_error(task, error_msg)
+            except:
+                self.update_log_signal(error_msg)
+                
+        if current_bot:
+            try:
                 current_bot.close_browser()
+            except:
+                pass
                 
         self.update_log_signal("모든 작업이 완료되었습니다.")
         # 작업 완료 후 자동 새로고침
@@ -1779,50 +1787,50 @@ class MainApp(QMainWindow):
         from PySide6.QtCore import QMetaObject, Qt, Q_ARG
         QMetaObject.invokeMethod(self, "load_tasks", Qt.QueuedConnection)
         
+    def handle_task_error(self, task, msg):
+        self.update_log_signal(msg)
+        
+        # 실패 횟수 추적 로직 추가
+        if not hasattr(self, 'task_retry_counts'):
+            self.task_retry_counts = {}
+            
+        task_id_key = f"{task.get('id', '')}_{task.get('row_index', '')}"
+        current_retries = self.task_retry_counts.get(task_id_key, 0)
+        
+        if current_retries >= 2:
+            self.update_log_signal(f"[{task['name']}] 2회 이상 실패하여 해당 일정 칸에 에러 사유를 기록합니다.")
+            
+            # J:M 일정 칸에 에러 사유 쓰기
+            error_label = f"에러: {msg}"
+            if len(error_label) > 15:
+                error_label = error_label[:15] + ".."
+                
+            task['next_run'] = error_label
+            self.sheet_mgr.update_date_manual(task['row_index'], error_label, task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
+            self.task_retry_counts[task_id_key] = 0 # 리셋
+        else:
+            self.task_retry_counts[task_id_key] = current_retries + 1
+            self.update_log_signal(f"[{task['name']}] 예약 일정은 유지됩니다. ({self.task_retry_counts[task_id_key]}/2회 재시도 실패)")
+            self.update_log_signal(f"  -> 일시적 오류일 경우 다음 실행 시 재시도됩니다.")
+
     def process_single_task(self, bot, task):
         """단일 작업 수행 로직"""
         # task는 딕셔너리
         self.update_log_signal(f"=== 작업 시작: {task['cafe_name']} - {task['board_name']} ===")
         
-        def cancel_task_on_error(msg):
-            self.update_log_signal(msg)
-            
-            # 실패 횟수 추적 로직 추가
-            if not hasattr(self, 'task_retry_counts'):
-                self.task_retry_counts = {}
-                
-            task_id_key = f"{task.get('id', '')}_{task.get('row_index', '')}"
-            current_retries = self.task_retry_counts.get(task_id_key, 0)
-            
-            if current_retries >= 2:
-                self.update_log_signal(f"[{task['name']}] 2회 이상 실패하여 해당 일정 칸에 에러 사유를 기록합니다.")
-                
-                # J:M 일정 칸에 에러 사유 쓰기
-                error_label = f"에러: {msg}"
-                if len(error_label) > 15:
-                    error_label = error_label[:15] + ".."
-                    
-                task['next_run'] = error_label
-                self.sheet_mgr.update_date_manual(task['row_index'], error_label, task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
-                self.task_retry_counts[task_id_key] = 0 # 리셋
-            else:
-                self.task_retry_counts[task_id_key] = current_retries + 1
-                self.update_log_signal(f"[{task['name']}] 예약 일정은 유지됩니다. ({self.task_retry_counts[task_id_key]}/2회 재시도 실패)")
-                self.update_log_signal(f"  -> 일시적 오류일 경우 다음 실행 시 재시도됩니다.")
-        
         # 1. 로그인
         if not bot.login(task['id'], task['pw']):
-             cancel_task_on_error("작업 실패: 로그인 불가. 계정 정보나 보안 입력을 확인하세요.")
+             self.handle_task_error(task, "작업 실패: 로그인 불가. 계정 정보나 보안 입력을 확인하세요.")
              return
 
         # 2. URL 및 접속
         cafe_url = self.sheet_mgr.get_cafe_url(task['cafe_name'])
         if not cafe_url:
-            cancel_task_on_error(f"작업 실패: '{task['cafe_name']}'의 URL을 찾지 못했습니다. 카페 정보를 확인하세요.")
+            self.handle_task_error(task, f"작업 실패: '{task['cafe_name']}'의 URL을 찾지 못했습니다. 카페 정보를 확인하세요.")
             return
             
         if not bot.navigate_to_cafe(cafe_url):
-             cancel_task_on_error(f"작업 실패: '{task['cafe_name']}' 카페 접속 실패. 주소나 상태를 확인하세요.")
+             self.handle_task_error(task, f"작업 실패: '{task['cafe_name']}' 카페 접속 실패. 주소나 상태를 확인하세요.")
              return
 
         # 1-1. 기존 글 삭제 로직 (2주차 이상인 경우)
@@ -1864,7 +1872,7 @@ class MainApp(QMainWindow):
                 self.update_log_signal(">>> 게시글 삭제 실패 또는 글 없음.")
 
         if not bot.enter_board(task['board_name']):
-             cancel_task_on_error(f"작업 실패: 게시판 '{task['board_name']}' 진입 실패. 카페에 해당 게시판이 있는지 확인하세요.")
+             self.handle_task_error(task, f"작업 실패: 게시판 '{task['board_name']}' 진입 실패. 카페에 해당 게시판이 있는지 확인하세요.")
              return
         
         # 3. 컨텐츠 로드
@@ -1977,7 +1985,7 @@ class MainApp(QMainWindow):
              except:
                  pass
         else:
-             cancel_task_on_error("작업 실패: 글쓰기 오류 (요소 찾기, 시간 초과 등)")
+             self.handle_task_error(task, "작업 실패: 글쓰기 오류 (요소 찾기, 시간 초과 등)")
 
     def get_content_order_for_task_idx(self, task_idx):
         # 사용자 요청: 전, 후, 본문 순서 (이미지 -> 텍스트)

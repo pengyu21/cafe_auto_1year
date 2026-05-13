@@ -20,12 +20,16 @@ from selenium.webdriver.chrome.options import Options
 class NaverCafeBot:
     def __init__(self):
         self.driver = None
+        self.port = None
 
     def start_browser(self, port=None, profile_dir=None):
         """브라우저 실행"""
+        self.port = port
         chrome_options = Options()
         # chrome_options.add_argument("--headless") # 디버깅을 위해 헤드리스 끔
         chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
         
         # [봇 탐지 우회 옵션 추가]
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -43,21 +47,101 @@ class NaverCafeBot:
 
         if port_in_use:
             print(f"DEBUG: Port {port} is already open. Attaching to existing browser.")
-            chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
+            # [수정] 디버거로 붙을 때는 기존 시작 옵션(excludeSwitches 등)을 넣으면 에러가 발생하므로 초기화
+            attach_options = Options()
+            attach_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
+            chrome_options = attach_options
         else:
-            if port:
-                chrome_options.add_argument(f"--remote-debugging-port={port}")
-            if profile_dir:
-                chrome_options.add_argument(f"--user-data-dir={profile_dir}")
+            # [봇 탐지 우회 핵심] 셀레니움으로 직접 브라우저를 띄우지 않고, 순수 크롬을 서브프로세스로 띄운 뒤 디버거로 붙음
+            print("DEBUG: Launching Pure Chrome via subprocess to bypass bot detection.")
+            import subprocess
+            import os
+            import time
+            chrome_paths = [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                os.path.join(os.environ.get('LOCALAPPDATA', ''), r"Google\Chrome\Application\chrome.exe")
+            ]
+            actual_chrome_path = None
+            for path in chrome_paths:
+                if os.path.exists(path):
+                    actual_chrome_path = path
+                    break
+                    
+            if actual_chrome_path and port and profile_dir:
+                cmd = [
+                    actual_chrome_path,
+                    f"--remote-debugging-port={port}",
+                    f"--user-data-dir={profile_dir}",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-sync",
+                ]
+                subprocess.Popen(cmd)
+                time.sleep(3) # 크롬이 완전히 뜰 때까지 대기
+                # [수정] 디버거로 붙을 때는 기존 옵션 초기화
+                attach_options = Options()
+                attach_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
+                chrome_options = attach_options
+            else:
+                if port:
+                    chrome_options.add_argument(f"--remote-debugging-port={port}")
+                if profile_dir:
+                    chrome_options.add_argument(f"--user-data-dir={profile_dir}")
         
-        self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+        try:
+            self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+        except Exception as e:
+            if port_in_use and ("Browser window not found" in str(e) or "chrome not reachable" in str(e) or "-32000" in str(e)):
+                print(f"DEBUG: Attaching failed ({e}). Killing orphaned process on port {port} and retrying...")
+                import subprocess
+                try:
+                    subprocess.run(f'FOR /F "tokens=5" %a in (\'netstat -ano ^| findstr :{port}\') do taskkill /F /PID %a', shell=True, capture_output=True)
+                except:
+                    pass
+                import time
+                time.sleep(1)
+                
+                # 재시도 (새로운 인스턴스 생성)
+                retry_options = Options()
+                retry_options.add_argument("--disable-gpu")
+                retry_options.add_argument("--no-sandbox")
+                retry_options.add_argument("--disable-dev-shm-usage")
+                retry_options.add_argument("--disable-blink-features=AutomationControlled")
+                retry_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                retry_options.add_experimental_option("useAutomationExtension", False)
+                if port:
+                    retry_options.add_argument(f"--remote-debugging-port={port}")
+                if profile_dir:
+                    retry_options.add_argument(f"--user-data-dir={profile_dir}")
+                
+                self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=retry_options)
+                port_in_use = False
+            else:
+                raise e
+                
         self.driver.implicitly_wait(2) # 10 -> 2로 단축 (속도 개선)
         if not port_in_use:
             self.driver.maximize_window()
 
     def close_browser(self):
+        # 10초 대기 (마지막 작업 결과를 확인할 수 있도록 창 유지)
+        import time
+        time.sleep(10)
+        
         if self.driver:
-            self.driver.quit()
+            try:
+                self.driver.quit()
+            except:
+                pass
+        
+        # 잔여 크롬 프로세스 강제 종료
+        if self.port:
+            import subprocess
+            try:
+                subprocess.run(f'FOR /F "tokens=5" %a in (\'netstat -ano ^| findstr :{self.port}\') do taskkill /F /PID %a', shell=True, capture_output=True)
+            except:
+                pass
 
     def _paste_image_from_clipboard(self, img_path: str):
         """이미지를 클립보드에 복사 (PowerShell 사용) 및 붙여넣기"""
@@ -105,73 +189,80 @@ class NaverCafeBot:
             print(f"DEBUG: Flushing Section '{current_section}' (Text len: {len(text_val)})")
 
     def login(self, user_id, user_pw):
-        """네이버 로그인 (세션 유효 시 스킵)"""
+        """네이버 로그인 (사전 로그인 프로필 사용)"""
         assert self.driver is not None
         try:
             print(f"DEBUG: Login check started for {user_id}")
             
-            # [최적화] 이미 네이버에 접속해있고 로그인 된 상태라면 스킵
-            # URL이 빈값('data:,')이면 무조건 접속해야 함.
-            curr_url = self.driver.current_url
-            print(f"DEBUG: Current URL: {curr_url}")
+            # 네이버 메인으로 이동하여 쿠키와 로그인 상태를 확실히 확인
+            try:
+                self.driver.set_page_load_timeout(15)
+                self.driver.get("https://naver.com")
+            except:
+                pass
+            time.sleep(2)
             
-            if "naver.com" in curr_url:
-                try:
-                    logout_btn = self.driver.find_element(By.CLASS_NAME, "btn_logout")
-                    print(f"이미 로그인 되어 있습니다. (ID: {user_id}) - 페이지 이동 생략")
-                    return True
-                except:
-                    print("DEBUG: Naver page but not logged in (no logout btn)")
-                    pass
-            else:
-                print("DEBUG: Not on Naver page, navigating...")
-
-            # 0. 현재 네이버 도메인이 아니라면 쿠키를 읽을 수 없으므로 가벼운 네이버 도메인으로 먼저 이동
-            curr_url = self.driver.current_url
-            if not curr_url or "naver.com" not in curr_url:
-                self.driver.set_page_load_timeout(10)
-                try:
-                    self.driver.get("https://cafe.naver.com") # 로그인 창이 아닌 평범한 카페 메인으로 이동
-                except:
-                    pass
-                time.sleep(1)
-                
-            # 1. 즉시 쿠키(NID_SES) 확인 (네이버 도메인에서만 읽기 가능)
+            # 1. 쿠키(NID_SES) 확인
             cookies = self.driver.get_cookies()
             has_nid_ses = any(cookie.get('name') == 'NID_SES' for cookie in cookies)
             
-            if has_nid_ses:
-                print(f"이미 로그인 되어 있습니다. (로직 스킵, ID: {user_id})")
+            # 2. 로그아웃 버튼 유무 확인 (실제 화면에 보이는지 확인)
+            has_logout_btn = False
+            try:
+                # 네이버 메인의 로그아웃 버튼 로딩을 위해 잠시 대기
+                if has_nid_ses:
+                    time.sleep(1)
+                
+                logout_links = self.driver.find_elements(By.XPATH, "//a[contains(text(), '로그아웃') or contains(@class, 'logout')] | //button[contains(text(), '로그아웃')]")
+                for link in logout_links:
+                    if link.is_displayed():
+                        has_logout_btn = True
+                        break
+            except:
+                pass
+
+            if has_nid_ses and has_logout_btn:
+                print(f"이미 로그인 되어 있습니다. (ID: {user_id}) - 로그인 절차 생략")
                 return True
                 
-            # 2. 쿠키가 없다면(로그인 안된 상태라면) 그때서야 로그인 페이지로 진입
-            print("로그인이 필요하여 로그인 페이지로 이동합니다.")
+                
+            print("로그인이 풀려있습니다 (사전 로그인 만료 또는 '로그인 상태 유지' 미체크). 자동 로그인을 시도합니다.")
             self.driver.get("https://nid.naver.com/nidlogin.login")
             time.sleep(2)
-
+            
             try:
                 id_input = self.driver.find_element(By.ID, "id")
             except:
-                print("이미 로그인 되어 있거나 로그인 페이지가 아닙니다.")
+                print("로그인 페이지를 불러오지 못했습니다.")
                 return True
 
             # 아이디 입력
-            id_input.click()
-            pyperclip.copy(user_id)
-            webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
-            time.sleep(1)
+            current_id = id_input.get_attribute("value")
+            if not current_id:
+                id_input.click()
+                pyperclip.copy(user_id)
+                webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
+                time.sleep(1)
+            else:
+                print("아이디가 이미 입력되어 있어 입력을 생략합니다.")
 
             # 비밀번호 입력
-            pw_input = self.driver.find_element(By.ID, "pw")
-            pw_input.click()
-            pyperclip.copy(user_pw)
-            webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
-            time.sleep(1)
+            try:
+                pw_input = self.driver.find_element(By.ID, "pw")
+                current_pw = pw_input.get_attribute("value")
+                if not current_pw:
+                    pw_input.click()
+                    pyperclip.copy(user_pw)
+                    webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
+                    time.sleep(1)
+                else:
+                    print("비밀번호가 이미 입력되어 있어 입력을 생략합니다.")
+            except:
+                pass
 
-            # 로그인 상태 유지 체크 (JS 클릭으로 강제 적용하여 오작동 방지)
+            # 로그인 상태 유지 체크
             try:
                 keep_checkbox = self.driver.find_element(By.ID, "keep")
-                
                 if keep_checkbox.tag_name == "div":
                     if keep_checkbox.get_attribute("aria-checked") == "false":
                         self.driver.execute_script("arguments[0].click();", keep_checkbox)
@@ -188,31 +279,14 @@ class NaverCafeBot:
             self.driver.find_element(By.ID, "log.login").click()
             time.sleep(3)
             
-            # 에러 메시지 확인 (비밀번호 틀림 등)
-            try:
-                # 네이버의 대표적인 에러 메시지 클래스 및 ID 확인
-                error_elements = self.driver.find_elements(By.CLASS_NAME, "error_message")
-                for err in error_elements:
-                    if err.is_displayed() and err.text.strip():
-                        print(f"로그인 실패 (네이버 메시지): {err.text.strip()}")
-                        return False
-            except:
-                pass
+            if "nidlogin" in self.driver.current_url or "login" in self.driver.current_url:
+                print("로그인 실패 (캡챠 등장 또는 비밀번호 오류)")
+                return False
                 
-            # 추가적인 에러 처리 (로그인 페이지에 계속 머물러 있는 경우)
-            if "nid.naver.com/nidlogin.login" in self.driver.current_url:
-                try:
-                    err_common = self.driver.find_element(By.ID, "err_common")
-                    if err_common.is_displayed() and err_common.text.strip():
-                         print(f"로그인 실패: {err_common.text.strip()}")
-                         return False
-                except:
-                    pass
-            
-            # 캡차/2단계 인증 등 대기 (필요시 수동)
             return True
+
         except Exception as e:
-            print(f"로그인 실패: {e}")
+            print(f"로그인 처리 중 에러: {e}")
             return False
 
     def navigate_to_cafe(self, cafe_url):
