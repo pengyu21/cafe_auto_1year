@@ -14,6 +14,46 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer, QTime, QDate, QDateTime,
 from PySide6.QtGui import QIcon, QFont, QAction, QColor, QDesktopServices, QIntValidator, QPalette, QPainter, QPen # [추가] QPen
 from sheet_manager import GoogleSheetManager
 from navercafe_auto import NaverCafeBot
+import json
+
+def get_data_dir():
+    import os
+    user_profile = os.environ.get('USERPROFILE', os.path.expanduser('~'))
+    data_dir = os.path.join(user_profile, 'navercafe_auto_data')
+    if not os.path.exists(data_dir):
+        try:
+            os.makedirs(data_dir)
+        except:
+            pass
+    return data_dir
+
+def get_port_for_id(uid):
+    if not uid: return 9222
+    port_file = os.path.join(get_data_dir(), 'port_mapping.json')
+    mapping = {}
+    if os.path.exists(port_file):
+        try:
+            with open(port_file, 'r', encoding='utf-8') as f:
+                mapping = json.load(f)
+        except:
+            pass
+            
+    if uid in mapping:
+        return mapping[uid]
+        
+    used_ports = set(mapping.values())
+    new_port = 9222
+    while new_port in used_ports:
+        new_port += 1
+        
+    mapping[uid] = new_port
+    try:
+        with open(port_file, 'w', encoding='utf-8') as f:
+            json.dump(mapping, f, ensure_ascii=False, indent=4)
+    except:
+        pass
+        
+    return new_port
 
 class TaskCountCalendar(QCalendarWidget):
     """날짜별 예약 건수를 표시하는 커스텀 달력 위젯"""
@@ -1237,8 +1277,7 @@ class MainApp(QMainWindow):
             port_updates = {}
             for t in self.tasks:
                 if t['id'] in self.all_prep_ids:
-                    p_idx = self.all_prep_ids.index(t['id'])
-                    port = 9222 + p_idx
+                    port = get_port_for_id(t['id'])
                     port_updates[t['row_index']] = port
                     
             if port_updates:
@@ -1335,11 +1374,7 @@ class MainApp(QMainWindow):
                 
                 port_str = "-"
                 if all_ids and uid in all_ids:
-                    try:
-                        p_idx = all_ids.index(uid)
-                        port_str = str(9222 + p_idx)
-                    except:
-                        pass
+                    port_str = str(get_port_for_id(uid))
                 item_port = QTableWidgetItem(port_str)
                 item_port.setTextAlignment(Qt.AlignCenter)
                 table.setItem(r, 3, item_port)
@@ -1570,14 +1605,10 @@ class MainApp(QMainWindow):
                                 current_user_id = None
                             
                             # 새 브라우저 설정
-                            try:
-                                port_idx = all_ids.index(uid)
-                                port = 9222 + port_idx
-                            except:
-                                port = 9222
+                            port = get_port_for_id(uid)
                                 
                             # 공유 폴더 충돌 방지를 위해 로컬 사용자 폴더 내에 크롬 프로필 생성
-                            profile_dir = os.path.abspath(os.path.join(r"C:\Users\데스크1", "navercafe_profiles", uid))
+                            profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
                             
                             self.update_log_signal(f"브라우저 실행 (ID: {uid}, Port: {port})")
                             current_bot = NaverCafeBot()
@@ -1661,15 +1692,11 @@ class MainApp(QMainWindow):
         if not uid:
             return
             
-        try:
-            port_idx = self.all_prep_ids.index(uid)
-            port = 9222 + port_idx
-        except:
-            port = 9222
+        port = get_port_for_id(uid)
         self.line_prep_port.setText(str(port))
         
         # UI에 현재 경로 표시
-        profile_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "chrome_profiles", uid))
+        profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
         if hasattr(self, 'lbl_profile_path'):
             self.lbl_profile_path.setText(f"(캐시: {profile_dir})")
         
@@ -1681,7 +1708,7 @@ class MainApp(QMainWindow):
             return
             
         port = int(port_str)
-        profile_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "chrome_profiles", uid))
+        profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
         
         self.log(f">>> 사전 로그인용 브라우저를 엽니다 (ID: {uid}, Port: {port})")
         self.log(f"    브라우저가 열리면 수동으로 [로그인 상태 유지]를 꼭 체크하고 로그인해주세요.")
@@ -1715,6 +1742,7 @@ class MainApp(QMainWindow):
             # 셀레니움을 완전히 배제하고 순수 크롬을 직접 실행
             cmd = [
                 actual_chrome_path,
+                f"--remote-debugging-port={port}",
                 f"--user-data-dir={profile_dir}",
                 "--no-first-run",
                 "--no-default-browser-check",
@@ -1748,14 +1776,10 @@ class MainApp(QMainWindow):
                         current_bot = None
                     
                     # 새 브라우저 설정
-                    try:
-                        port_idx = all_ids.index(uid)
-                        port = 9222 + port_idx
-                    except:
-                        port = 9222
+                    port = get_port_for_id(uid)
                         
                     # 공유 폴더 충돌 방지를 위해 로컬 사용자 폴더 내에 크롬 프로필 생성
-                    profile_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "chrome_profiles", uid))
+                    profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
                     
                     self.update_log_signal(f"브라우저 실행 (ID: {uid}, Port: {port})")
                     current_bot = NaverCafeBot()

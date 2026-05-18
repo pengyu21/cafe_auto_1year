@@ -206,84 +206,36 @@ class NaverCafeBot:
             cookies = self.driver.get_cookies()
             has_nid_ses = any(cookie.get('name') == 'NID_SES' for cookie in cookies)
             
-            # 2. 로그아웃 버튼 유무 확인 (실제 화면에 보이는지 확인)
-            has_logout_btn = False
-            try:
-                # 네이버 메인의 로그아웃 버튼 로딩을 위해 잠시 대기
-                if has_nid_ses:
-                    time.sleep(1)
+            # 2. 로그인 상태 확인 로직 개선
+            # 네이버 메인의 UI가 변경되거나 로딩이 늦어 로그아웃 버튼을 못 찾는 경우 방지
+            is_logged_in = False
+            if has_nid_ses:
+                # NID_SES 쿠키가 존재하면 기본적으로 사전 로그인이 유지되고 있는 것으로 판단
+                is_logged_in = True
                 
-                logout_links = self.driver.find_elements(By.XPATH, "//a[contains(text(), '로그아웃') or contains(@class, 'logout')] | //button[contains(text(), '로그아웃')]")
-                for link in logout_links:
-                    if link.is_displayed():
-                        has_logout_btn = True
-                        break
-            except:
-                pass
+                try:
+                    time.sleep(1)
+                    # 명시적인 메인 로그인 버튼이 화면에 보인다면 세션이 만료된 것으로 교차 검증
+                    login_btns = self.driver.find_elements(By.CLASS_NAME, "link_login")
+                    for btn in login_btns:
+                        if btn.is_displayed():
+                            is_logged_in = False
+                            print("NID_SES 쿠키는 존재하나 로그인 버튼이 표시되어 세션 만료로 판단합니다.")
+                            break
+                except:
+                    pass
 
-            if has_nid_ses and has_logout_btn:
-                print(f"이미 로그인 되어 있습니다. (ID: {user_id}) - 로그인 절차 생략")
+            if is_logged_in:
+                print(f"사전 로그인 세션이 유효합니다. (포트 프로필 유지 중, ID: {user_id}) - 로그인 절차 생략")
                 return True
                 
-                
-            print("로그인이 풀려있습니다 (사전 로그인 만료 또는 '로그인 상태 유지' 미체크). 자동 로그인을 시도합니다.")
-            self.driver.get("https://nid.naver.com/nidlogin.login")
-            time.sleep(2)
-            
-            try:
-                id_input = self.driver.find_element(By.ID, "id")
-            except:
-                print("로그인 페이지를 불러오지 못했습니다.")
-                return True
-
-            # 아이디 입력
-            current_id = id_input.get_attribute("value")
-            if not current_id:
-                id_input.click()
-                pyperclip.copy(user_id)
-                webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
-                time.sleep(1)
-            else:
-                print("아이디가 이미 입력되어 있어 입력을 생략합니다.")
-
-            # 비밀번호 입력
-            try:
-                pw_input = self.driver.find_element(By.ID, "pw")
-                current_pw = pw_input.get_attribute("value")
-                if not current_pw:
-                    pw_input.click()
-                    pyperclip.copy(user_pw)
-                    webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
-                    time.sleep(1)
-                else:
-                    print("비밀번호가 이미 입력되어 있어 입력을 생략합니다.")
-            except:
-                pass
-
-            # 로그인 상태 유지 체크
-            try:
-                keep_checkbox = self.driver.find_element(By.ID, "keep")
-                if keep_checkbox.tag_name == "div":
-                    if keep_checkbox.get_attribute("aria-checked") == "false":
-                        self.driver.execute_script("arguments[0].click();", keep_checkbox)
-                        time.sleep(0.5)
-                else:
-                    if not keep_checkbox.is_selected():
-                        keep_label = self.driver.find_element(By.XPATH, "//label[@for='keep']")
-                        self.driver.execute_script("arguments[0].click();", keep_label)
-                        time.sleep(0.5)
-            except Exception as e:
-                print(f"로그인 상태 유지 체크박스 처리 실패 (무시됨): {e}")
-
-            # 로그인 버튼 클릭
-            self.driver.find_element(By.ID, "log.login").click()
-            time.sleep(3)
-            
-            if "nidlogin" in self.driver.current_url or "login" in self.driver.current_url:
-                print("로그인 실패 (캡챠 등장 또는 비밀번호 오류)")
-                return False
-                
-            return True
+            print("=========================================================")
+            print("경고: 브라우저가 로그아웃 상태입니다 (사전 로그인 만료 또는 미진행).")
+            print("캡챠(자동입력 방지) 발생을 막기 위해 봇이 자동으로 아이디/비밀번호를 입력하지 않습니다.")
+            print("수동 브라우저 열기를 통해 네이버에 직접 로그인하신 후 다시 시도해주세요.")
+            print("※ 팁: 로그인 시 '로그인 상태 유지' 체크박스를 반드시 체크해주세요!")
+            print("=========================================================")
+            return False
 
         except Exception as e:
             print(f"로그인 처리 중 에러: {e}")

@@ -856,6 +856,10 @@ class GoogleSheetManager:
                         print(f"[AUTO-SCHEDULER] Error writing first base date! : {e}")
                     
                     if date_str:
+                        # 에러 메시지 등 날짜 형식이 아닌 경우 추가 계산 생략
+                        if "에러" in date_str or "실패" in date_str:
+                            return
+                            
                         # [복구] 필요한 정보 가져오기 (task_data가 불충분할 수 있으므로 시트 직접 참조)
                         row_vals = self.task_sheet.row_values(target_row)
                         preset_str = row_vals[self.COL_PRESET] if len(row_vals) > self.COL_PRESET else ""
