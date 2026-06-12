@@ -601,7 +601,7 @@ class TaskLoaderThread(QThread):
             self.errorOccurred.emit(str(e))
 
 
-__version__ = "1.1.5"
+__version__ = "1.1.8"
 
 class MainApp(QMainWindow):
     def __init__(self):

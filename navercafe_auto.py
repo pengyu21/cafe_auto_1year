@@ -255,29 +255,106 @@ class NaverCafeBot:
     def enter_board(self, board_name):
         """게시판 진입 (좌측 메뉴 or 상단 메뉴 검색)"""
         try:
-            # 프레임 전환이 필요할 수 있음. 네이버 카페 메인은 보통 'cafe_main' 프레임 사용하지만 메뉴는 바깥에 있을 수 있음.
-            # 일단 기본 컨텐츠로 검색
+            # 1. 양끝 공백 제거 (구글 시트 입력값 등 대비)
+            board_name = board_name.strip()
             
-            # 메뉴 링크 찾기 (Partial Link Text 사용)
-            # 네이버 카페 메뉴는 보통 iframe 밖에 있거나 cafe_main 안에 있을 수 있음. 구조에 따라 다름.
-            # 통상적으로 메뉴는 `a` 태그에 텍스트로 존재
-            
-            # 메뉴가 너무 많아서 검색이 힘들 경우:
-            # 좌측 메뉴바에서 텍스트로 찾기.
-            
-            # 1. 'cafe_main' 프레임이 있다면 일단 나올 것 (메뉴는 보통 메인 프레임 바깥)
+            # 2. 'cafe_main' 프레임 탈출 (메뉴는 보통 메인 프레임 바깥)
             try:
                 self.driver.switch_to.default_content()
+            except Exception as e:
+                print(f"DEBUG: default_content 전환 중 예외 발생 (무시): {e}")
+
+            # 3. WebDriverWait를 활용하여 요소를 대기하며 다양한 경로로 탐색
+            board_link = None
+            locators = [
+                (By.XPATH, f"//a[contains(normalize-space(text()), '{board_name}')]"),
+                (By.XPATH, f"//a[contains(., '{board_name}')]"),
+                (By.PARTIAL_LINK_TEXT, board_name)
+            ]
+            
+            last_err = None
+            for by, value in locators:
+                try:
+                    # 속도 단축을 위해 최대 5초 동안만 대기하며 탐색
+                    board_link = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((by, value))
+                    )
+                    if board_link:
+                        break
+                except Exception as e:
+                    last_err = e
+                    continue
+
+            if not board_link:
+                print(f"게시판 '{board_name}' 링크를 찾을 수 없습니다. 정확한 이름을 확인해주세요. (상세: {last_err})")
+                return False
+            
+            # 4. 화면에 보이도록 스크롤 이동
+            try:
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", board_link)
+                time.sleep(0.5)
             except:
                 pass
 
-            # 게시판 이름으로 링크 찾기
+            # 클릭 전에 target_href 미리 획득
+            target_href = None
             try:
-                board_link = self.driver.find_element(By.PARTIAL_LINK_TEXT, board_name)
-                board_link.click()
+                target_href = board_link.get_attribute("href")
             except:
-                print(f"게시판 '{board_name}' 링크를 찾을 수 없습니다. 정확한 이름을 확인해주세요.")
-                return False
+                pass
+
+            # 5. 클릭 시도 (일반 클릭 -> 실패 시 JS 강제 클릭 또는 타임아웃 예외 처리)
+            try:
+                board_link.click()
+            except Exception as click_err:
+                # 렌더러/페이지 로딩 15초 타임아웃 발생 시 대응
+                is_timeout = "timeout" in str(click_err).lower()
+                if is_timeout:
+                    print(f"게시판 '{board_name}' 클릭 중 페이지 로드 타임아웃 발생 (이동 여부 검증 후 진행).")
+                    time.sleep(2)
+                    current_url = self.driver.current_url
+                    
+                    # 1) target_href와 현재 URL 비교 (menuid 매칭)
+                    if target_href:
+                        from urllib.parse import urlparse, parse_qs
+                        try:
+                            target_query = parse_qs(urlparse(target_href).query)
+                            current_query = parse_qs(urlparse(current_url).query)
+                            
+                            # 'search.menuid' 또는 'menuid' 값 추출
+                            target_menu = target_query.get('search.menuid', [None])[0] or target_query.get('menuid', [None])[0]
+                            current_menu = current_query.get('search.menuid', [None])[0] or current_query.get('menuid', [None])[0]
+                            
+                            if target_menu and target_menu == current_menu:
+                                print(f"-> URL menuid가 일치함 ({target_menu}). 게시판 진입 성공 처리합니다.")
+                                return True
+                        except Exception as parse_err:
+                            print(f"-> URL 파싱 에러 (무시): {parse_err}")
+                            
+                        if target_href in current_url or current_url in target_href:
+                            print("-> 대상 URL이 매칭되어 진입 성공 처리합니다.")
+                            return True
+                    
+                    # 2) 페이지 내 게시판 관련 엘리먼트 존재 여부 검사
+                    try:
+                        self.driver.switch_to.default_content()
+                        if self.driver.find_elements(By.CSS_SELECTOR, "#cafe_content, .article-board, a.BaseButtonLink"):
+                            print("-> 게시판 화면 요소가 감지되어 진입 성공 처리합니다.")
+                            return True
+                    except:
+                        pass
+                
+                # 타임아웃이 아니거나, 타임아웃인데 페이지 이동이 확인되지 않은 경우 JS 클릭 시도
+                print(f"게시판 '{board_name}' 일반 클릭 실패 ({click_err}). JS 클릭으로 재시도합니다.")
+                try:
+                    self.driver.execute_script("arguments[0].click();", board_link)
+                except Exception as js_err:
+                    # 이미 일반 클릭으로 이동하여 엘리먼트가 stale 상태가 된 경우도 성공 처리
+                    if "stale" in str(js_err).lower():
+                        print("-> JS 클릭 시 stale element 에러 발생 (이미 페이지가 이동됨). 진입 성공 처리합니다.")
+                        return True
+                    print(f"게시판 '{board_name}' JS 클릭 실패: {js_err}")
+                    return False
                 
             time.sleep(2)
             return True
@@ -431,62 +508,89 @@ class NaverCafeBot:
         """
         assert self.driver is not None
         try:
-            # iframe 전환 (글쓰기 버튼 누른 후 에디터는 보통 iframe 안에 있음)
-            self.driver.switch_to.default_content()
-            
-            # 'cafe_main' 프레임 전환 (게시글 리스트가 있는 곳)
-            try:
-                self.driver.switch_to.frame("cafe_main")
-            except:
-                pass
-
             # 글쓰기 버튼 찾기 및 클릭 (Retry Logic)
-            # 사용자 제공 클래스: BaseButtonLink BaseButton--skinGreen size_default
             for attempt in range(3):
                 try:
                     btn = None
                     
-                    # 1. 사용자 지정 클래스 (가장 우선)
-                    try:
-                        # 복합 클래스이므로 CSS Selector 사용 (띄어쓰기는 점으로)
-                        # .BaseButtonLink.BaseButton--skinGreen.size_default
-                        # 혹은 그냥 '글쓰기' 텍스트 포함 확인
-                        btn_selector = "a.BaseButtonLink.BaseButton--skinGreen"
-                        btn = WebDriverWait(self.driver, 5).until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, btn_selector))
-                        )
-                    except:
-                        pass
+                    # 다양한 요소를 순차적으로 탐색하여 가장 신뢰성 높은 글쓰기 버튼 찾기
+                    locators = [
+                        # 1. BaseButton__txt 클래스를 가진 span을 자식으로 둔 a 태그 (가장 매칭률 높음)
+                        (By.XPATH, "//a[contains(@class, 'BaseButton') and .//span[contains(@class, 'BaseButton__txt') and contains(text(), '글쓰기')]]"),
+                        # 2. BaseButton__txt 클래스 span을 품은 일반 a 태그
+                        (By.XPATH, "//span[contains(@class, 'BaseButton__txt') and contains(text(), '글쓰기')]/ancestor::a"),
+                        # 3. BaseButton 클래스이면서 텍스트로 글쓰기를 포함하는 a 태그
+                        (By.XPATH, "//a[contains(@class, 'BaseButton') and contains(., '글쓰기')]"),
+                        # 4. CSS 셀렉터
+                        (By.CSS_SELECTOR, "a.BaseButtonLink.BaseButton--skinGreen"),
+                        # 5. 기존 ID 백업
+                        (By.ID, "writeFormBtn"),
+                        # 6. 일반 a 태그 내 글쓰기 텍스트 포함 (contains(., ...) 사용으로 하위 span 텍스트도 인식)
+                        (By.XPATH, "//a[contains(., '글쓰기')]"),
+                        # 7. 만약 a 태그 바깥이나 단순 span/button 형태인 경우 직접 선택
+                        (By.XPATH, "//span[contains(@class, 'BaseButton__txt') and contains(text(), '글쓰기')]"),
+                        (By.XPATH, "//*[contains(text(), '글쓰기')]")
+                    ]
                     
-                    # 2. 기존 방법들 (백업)
+                    # 1단계: default_content (최상위, 새로운 프레임리스 레이아웃)에서 먼저 탐색
+                    print(f"[{attempt+1}차 시도] 최상위 컨텍스트에서 글쓰기 버튼 탐색 중...")
+                    self.driver.switch_to.default_content()
+                    for by, val in locators:
+                        try:
+                            btn = WebDriverWait(self.driver, 1.5).until(
+                                EC.presence_of_element_located((by, val))
+                            )
+                            if btn:
+                                print(f"최상위 컨텍스트에서 글쓰기 버튼을 찾았습니다: {val}")
+                                break
+                        except:
+                            continue
+                    
+                    # 2단계: 최상위에서 못 찾았다면 기존 cafe_main iframe 안에서 탐색
                     if not btn:
                         try:
-                            btn = self.driver.find_element(By.ID, "writeFormBtn")
-                        except:
-                            pass
-                            
-                    if not btn:
-                         try:
-                            btn = self.driver.find_element(By.XPATH, "//a[contains(text(), '글쓰기')]")
-                         except:
-                            pass
+                            print(f"[{attempt+1}차 시도] cafe_main 프레임 내부에서 글쓰기 버튼 탐색 중...")
+                            self.driver.switch_to.default_content()
+                            self.driver.switch_to.frame("cafe_main")
+                            for by, val in locators:
+                                try:
+                                    btn = WebDriverWait(self.driver, 1.5).until(
+                                        EC.presence_of_element_located((by, val))
+                                    )
+                                    if btn:
+                                        print(f"cafe_main 프레임 내부에서 글쓰기 버튼을 찾았습니다: {val}")
+                                        break
+                                except:
+                                    continue
+                        except Exception as frame_err:
+                            print(f"cafe_main 프레임 전환 실패 또는 검색 오류: {frame_err}")
                             
                     if btn:
-                        # [창 1개만 쓰는 로직으로 변경]
-                        # btn.click() 시 새 창이 뜨지 않도록 href를 추출하여 현재 탭에서 직접 이동
-                        href = btn.get_attribute("href")
-                        
-                        self.driver.switch_to.default_content() # 최상위로 빠져나옴
+                        href = None
+                        try:
+                            href = btn.get_attribute("href")
+                        except Exception as href_err:
+                            print(f"href 속성 획득 실패: {href_err}")
                         
                         if href and "javascript" not in href and href != "#":
+                            self.driver.switch_to.default_content() # 최상위로 빠져나옴
                             print(f"새 창을 띄우지 않고 글쓰기 페이지로 직접 이동합니다: {href}")
                             self.driver.get(href)
                         else:
-                            print("href가 없으므로 target='_blank'를 속성에서 제거하고 클릭합니다.")
+                            print("href가 없거나 올바르지 않으므로 target='_blank' 속성 제거 후 일반 클릭을 시도합니다.")
                             try:
                                 self.driver.execute_script("arguments[0].removeAttribute('target');", btn)
                             except: pass
-                            btn.click()
+                            try:
+                                btn.click()
+                            except Exception as click_err:
+                                print(f"일반 클릭 실패, JS 클릭 시도: {click_err}")
+                                try:
+                                    self.driver.execute_script("arguments[0].click();", btn)
+                                except Exception as js_err:
+                                    print(f"JS 클릭도 실패했습니다: {js_err}")
+                                    if attempt == 2:
+                                        return False
                         
                         time.sleep(5) # 페이지 이동 대기
                         break # 성공 시 루프 탈출
@@ -498,16 +602,10 @@ class NaverCafeBot:
                         time.sleep(2)
                         
                 except Exception as e:
-                    print(f"글쓰기 버튼 클릭 중 에러 (시도 {attempt+1}/3): {e}")
+                    print(f"글쓰기 버튼 클릭 프로세스 중 에러 (시도 {attempt+1}/3): {e}")
                     if attempt == 2:
                         return False
                     time.sleep(2)
-                    # 프레임 재진입 시도 for Retry
-                    try:
-                        self.driver.switch_to.default_content()
-                        self.driver.switch_to.frame("cafe_main")
-                    except:
-                        pass
             
             # 스마트에디터 로딩 대기
             time.sleep(5) 
