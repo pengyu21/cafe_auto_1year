@@ -55,6 +55,24 @@ def get_port_for_id(uid):
         
     return new_port
 
+def set_port_for_id(uid, port):
+    if not uid: return
+    port_file = os.path.join(get_data_dir(), 'port_mapping.json')
+    mapping = {}
+    if os.path.exists(port_file):
+        try:
+            with open(port_file, 'r', encoding='utf-8') as f:
+                mapping = json.load(f)
+        except:
+            pass
+            
+    mapping[uid] = int(port)
+    try:
+        with open(port_file, 'w', encoding='utf-8') as f:
+            json.dump(mapping, f, ensure_ascii=False, indent=4)
+    except:
+        pass
+
 class TaskCountCalendar(QCalendarWidget):
     """날짜별 예약 건수를 표시하는 커스텀 달력 위젯"""
     def __init__(self, tasks, parent=None):
@@ -210,7 +228,7 @@ class DatePickerDialog(QDialog):
         vbox_time.setSpacing(15) # Adjusted spacing
 
         lbl_title = QLabel("시간 설정")
-        lbl_title.setStyleSheet("font-size: 12pt; color: #606266; border: none;") # Adjusted style
+        lbl_title.setStyleSheet("font-size: 11pt; color: #606266; border: none;") # Adjusted style
         lbl_title.setAlignment(Qt.AlignCenter)
         vbox_time.addWidget(lbl_title)
 
@@ -222,7 +240,7 @@ class DatePickerDialog(QDialog):
         self.hour_edit = QLineEdit("12") # Replaced QLabel with QLineEdit
         self.hour_edit.setValidator(QIntValidator(0, 23)) # Added validator
         self.hour_edit.setAlignment(Qt.AlignCenter)
-        self.hour_edit.setStyleSheet("font-size: 24pt; font-weight: bold; color: #303133; min-width: 60px; background: white; border: 1px solid #dcdfe6; border-radius: 4px;")
+        self.hour_edit.setStyleSheet("font-size: 18pt; font-weight: bold; color: #303133; min-width: 60px; background: white; border: 1px solid #dcdfe6; border-radius: 4px;")
         self.btn_h_plus = QPushButton("＋")
 
         self.setup_time_widgets(self.btn_h_minus, self.hour_edit, self.btn_h_plus)
@@ -236,7 +254,7 @@ class DatePickerDialog(QDialog):
         self.min_edit = QLineEdit("00") # Replaced QLabel with QLineEdit
         self.min_edit.setValidator(QIntValidator(0, 59)) # Added validator
         self.min_edit.setAlignment(Qt.AlignCenter)
-        self.min_edit.setStyleSheet("font-size: 24pt; font-weight: bold; color: #303133; min-width: 60px; background: white; border: 1px solid #dcdfe6; border-radius: 4px;")
+        self.min_edit.setStyleSheet("font-size: 18pt; font-weight: bold; color: #303133; min-width: 60px; background: white; border: 1px solid #dcdfe6; border-radius: 4px;")
         self.btn_m_plus = QPushButton("＋")
 
         self.setup_time_widgets(self.btn_m_minus, self.min_edit, self.btn_m_plus)
@@ -261,7 +279,7 @@ class DatePickerDialog(QDialog):
         self.lbl_selected_display = QLabel("")
         self.lbl_selected_display.setStyleSheet("""
             background-color: #ecf5ff; border: 1px solid #d9ecff; border-radius: 4px;
-            color: #409eff; font-size: 13pt; font-weight: bold; padding: 10px;
+            color: #409eff; font-size: 11pt; font-weight: bold; padding: 10px;
         """)
         self.lbl_selected_display.setAlignment(Qt.AlignCenter)
         bottom_layout.addWidget(self.lbl_selected_display)
@@ -273,7 +291,7 @@ class DatePickerDialog(QDialog):
         self.btn_ok = QPushButton("설정 완료 (OK)")
         self.btn_ok.setCursor(Qt.PointingHandCursor)
         self.btn_ok.setStyleSheet("""
-            padding: 12px 30px; font-size: 11pt; font-weight: bold; color: white;
+            padding: 12px 30px; font-size: 10pt; font-weight: bold; color: white;
             background-color: #409eff; border-radius: 4px; border: none;
         """)
         self.btn_ok.clicked.connect(self.accept)
@@ -281,7 +299,7 @@ class DatePickerDialog(QDialog):
         self.btn_cancel = QPushButton("취소")
         self.btn_cancel.setCursor(Qt.PointingHandCursor)
         self.btn_cancel.setStyleSheet("""
-            padding: 12px 20px; font-size: 11pt; color: #606266;
+            padding: 12px 20px; font-size: 10pt; color: #606266;
             background-color: white; border: 1px solid #dcdfe6; border-radius: 4px;
         """)
         self.btn_cancel.clicked.connect(self.reject)
@@ -1052,11 +1070,11 @@ class MainApp(QMainWindow):
 
     def setup_table(self, table, table_type="ready"):
         if table_type == "completed":
-            table.setColumnCount(6)
-            table.setHorizontalHeaderLabels(["선택", "이름", "아이디", "포트", "카페명", "게시판"])
+            table.setColumnCount(7)
+            table.setHorizontalHeaderLabels(["선택", "번호", "이름", "아이디", "포트", "카페명", "게시판"])
         else:
-            table.setColumnCount(8)
-            table.setHorizontalHeaderLabels(["선택", "이름", "아이디", "포트", "카페명", "게시판", "업로드", "다음예약"])
+            table.setColumnCount(9)
+            table.setHorizontalHeaderLabels(["선택", "번호", "이름", "아이디", "포트", "카페명", "게시판", "업로드", "다음예약"])
             
         table.horizontalHeader().setStretchLastSection(True)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -1072,14 +1090,15 @@ class MainApp(QMainWindow):
         
         # 컬럼 너비 조정 (1500px 창에 맞춰 넉넉하게, 오른쪽 다음예약 잘 보이게)
         table.setColumnWidth(0, 40)   # 선택
-        table.setColumnWidth(1, 80)   # 이름
-        table.setColumnWidth(2, 100)  # 아이디
-        table.setColumnWidth(3, 50)   # 포트
-        table.setColumnWidth(4, 120)  # 카페명
-        table.setColumnWidth(5, 140)  # 게시판
+        table.setColumnWidth(1, 50)   # 번호
+        table.setColumnWidth(2, 180)  # 이름
+        table.setColumnWidth(3, 100)  # 아이디
+        table.setColumnWidth(4, 50)   # 포트
+        table.setColumnWidth(5, 120)  # 카페명
+        table.setColumnWidth(6, 140)  # 게시판
         if table_type != "completed":
-            table.setColumnWidth(6, 170)  # 업로드 폭 늘림 (120 -> 170) ('(8주 파일없음!)' 표시 공간 확보)
-            table.setColumnWidth(7, 200)  # 다음예약 (모두 표시)
+            table.setColumnWidth(7, 170)  # 업로드 폭 늘림 (120 -> 170) ('(8주 파일없음!)' 표시 공간 확보)
+            table.setColumnWidth(8, 200)  # 다음예약 (모두 표시)
 
     def on_table_context_menu(self, pos, table):
         from PySide6.QtWidgets import QMenu
@@ -1138,8 +1157,8 @@ class MainApp(QMainWindow):
         sender = self.sender()
         if not sender: return
         
-        # 7번 컬럼(다음예약) 체크 (인덱스 변경됨 8 -> 7)
-        if col == 7:
+        # 8번 컬럼(다음예약) 체크 (인덱스 변경됨 7 -> 8)
+        if col == 8:
             # 해당 테이블의 row에 매핑된 task 찾기
             task_idx = sender.item(row, 0).data(Qt.UserRole)
             if task_idx is not None and task_idx < len(self.tasks):
@@ -1361,36 +1380,45 @@ class MainApp(QMainWindow):
                 data_item.setData(Qt.UserRole, real_idx)
                 table.setItem(r, 0, data_item)
                 
+                no_val = str(task.get('no', '')).strip()
+                item_no = QTableWidgetItem()
+                try:
+                    item_no.setData(Qt.EditRole, int(no_val))
+                except ValueError:
+                    item_no.setData(Qt.EditRole, no_val)
+                item_no.setTextAlignment(Qt.AlignCenter)
+                table.setItem(r, 1, item_no)
+                
                 item_name = QTableWidgetItem(task['name'])
                 item_name.setTextAlignment(Qt.AlignCenter)
-                table.setItem(r, 1, item_name)
+                table.setItem(r, 2, item_name)
                 
                 # ID 및 Port 계산
                 uid = task['id']
                 
                 item_id = QTableWidgetItem(uid)
                 item_id.setTextAlignment(Qt.AlignCenter)
-                table.setItem(r, 2, item_id)
+                table.setItem(r, 3, item_id)
                 
                 port_str = "-"
                 if all_ids and uid in all_ids:
                     port_str = str(get_port_for_id(uid))
                 item_port = QTableWidgetItem(port_str)
                 item_port.setTextAlignment(Qt.AlignCenter)
-                table.setItem(r, 3, item_port)
+                table.setItem(r, 4, item_port)
                 
                 item_cafe = QTableWidgetItem(task['cafe_name'])
                 item_cafe.setTextAlignment(Qt.AlignCenter)
-                table.setItem(r, 4, item_cafe)
+                table.setItem(r, 5, item_cafe)
 
                 item_board = QTableWidgetItem(task['board_name'])
                 item_board.setTextAlignment(Qt.AlignCenter)
-                table.setItem(r, 5, item_board)
+                table.setItem(r, 6, item_board)
 
                 if table == self.table_completed:
                     continue
 
-                # 6. 업로드 (남은 주기 표시)
+                # 7. 업로드 (남은 주기 표시)
                 p_str = task['period']
                 display_period = "-"
                 
@@ -1434,9 +1462,9 @@ class MainApp(QMainWindow):
                     font.setBold(True)
                     item_period.setFont(font)
                     
-                table.setItem(r, 6, item_period)
+                table.setItem(r, 7, item_period)
 
-                # 7. 다음 예약
+                # 8. 다음 예약
                 next_run_str = task['next_run']
                 item_res = QTableWidgetItem(next_run_str)
                 item_res.setTextAlignment(Qt.AlignCenter)
@@ -1450,7 +1478,7 @@ class MainApp(QMainWindow):
                     font.setBold(True)
                     item_res.setFont(font)
                     
-                table.setItem(r, 7, item_res)
+                table.setItem(r, 8, item_res)
             except Exception as e:
                 print(f"Error filling row {r}: {e}")
                 continue
@@ -1713,6 +1741,9 @@ class MainApp(QMainWindow):
         self.log(f">>> 사전 로그인용 브라우저를 엽니다 (ID: {uid}, Port: {port})")
         self.log(f"    브라우저가 열리면 수동으로 [로그인 상태 유지]를 꼭 체크하고 로그인해주세요.")
         self.log(f"    로그인 후 브라우저를 그대로 두셔도 자동 지원되며, 닫아도 세션이 유지됩니다.")
+        
+        # [수정] 사전로그인 시 수정한 포트번호가 봇 실행 시에도 반영되도록 저장합니다.
+        set_port_for_id(uid, port)
         
         # 백그라운드 스레드에서 브라우저 열기 (GUI 멈춤 방지)
         threading.Thread(target=self._run_prep_browser, args=(port, profile_dir)).start()

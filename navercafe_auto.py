@@ -341,6 +341,17 @@ class NaverCafeBot:
                         if self.driver.find_elements(By.CSS_SELECTOR, "#cafe_content, .article-board, a.BaseButtonLink"):
                             print("-> 게시판 화면 요소가 감지되어 진입 성공 처리합니다.")
                             return True
+                            
+                        # 구형 레이아웃 대응: cafe_main 프레임 내부 검사 추가
+                        try:
+                            self.driver.switch_to.frame("cafe_main")
+                            if self.driver.find_elements(By.CSS_SELECTOR, "#cafe_content, .article-board, a.BaseButtonLink"):
+                                print("-> cafe_main 프레임에서 게시판 화면 요소가 감지되어 진입 성공 처리합니다.")
+                                self.driver.switch_to.default_content()
+                                return True
+                            self.driver.switch_to.default_content()
+                        except:
+                            self.driver.switch_to.default_content()
                     except:
                         pass
                 
@@ -350,7 +361,8 @@ class NaverCafeBot:
                     self.driver.execute_script("arguments[0].click();", board_link)
                 except Exception as js_err:
                     # 이미 일반 클릭으로 이동하여 엘리먼트가 stale 상태가 된 경우도 성공 처리
-                    if "stale" in str(js_err).lower():
+                    err_msg = repr(js_err).lower() + " " + str(js_err).lower()
+                    if "stale" in err_msg:
                         print("-> JS 클릭 시 stale element 에러 발생 (이미 페이지가 이동됨). 진입 성공 처리합니다.")
                         return True
                     print(f"게시판 '{board_name}' JS 클릭 실패: {js_err}")
