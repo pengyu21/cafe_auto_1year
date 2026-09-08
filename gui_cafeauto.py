@@ -685,7 +685,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.23"
+__version__ = "1.24"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1228,17 +1228,17 @@ del "%~f0"
         # [추가] 정렬 기능 활성화
         table.setSortingEnabled(True)
         
-        # 컬럼 너비 조정 (1500px 창에 맞춰 넉넉하게, 오른쪽 다음예약 잘 보이게)
+        # 컬럼 너비 조정 (불필요한 여백 축소 및 짤리는 컬럼 확대)
         table.setColumnWidth(0, 40)   # 선택
-        table.setColumnWidth(1, 50)   # 번호
-        table.setColumnWidth(2, 180)  # 이름
-        table.setColumnWidth(3, 100)  # 아이디
+        table.setColumnWidth(1, 45)   # 번호
+        table.setColumnWidth(2, 110)  # 이름 (여백 축소)
+        table.setColumnWidth(3, 90)   # 아이디 (여백 축소)
         table.setColumnWidth(4, 50)   # 포트
-        table.setColumnWidth(5, 120)  # 카페명
-        table.setColumnWidth(6, 140)  # 게시판
+        table.setColumnWidth(5, 170)  # 카페명 (텍스트 짤림 방지)
+        table.setColumnWidth(6, 160)  # 게시판
         if table_type != "completed":
-            table.setColumnWidth(7, 170)  # 업로드 폭 늘림 (120 -> 170) ('(8주 파일없음!)' 표시 공간 확보)
-            table.setColumnWidth(8, 200)  # 다음예약 (모두 표시)
+            table.setColumnWidth(7, 130)  # 업로드 (여백 축소)
+            table.setColumnWidth(8, 160)  # 다음예약
 
     def on_table_context_menu(self, pos, table):
         from PySide6.QtWidgets import QMenu
