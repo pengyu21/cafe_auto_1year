@@ -17,6 +17,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout repository
@@ -36,8 +39,8 @@ jobs:
         id: extract_version
         run: |
           # 파이썬 코드를 실행하여 버전 추출
-          $VERSION = python -c "import re; print(re.search(r'__version__ = \"(.*?)\"', open('gui_cafeauto.py', encoding='utf-8').read()).group(1))"
-          echo "VERSION=$VERSION" >> $env:GITHUB_ENV
+          VERSION=$(python -c "import re; print(re.search(r'__version__ = \"(.*?)\"', open('gui_cafeauto.py', encoding='utf-8').read()).group(1))")
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Extracted version: $VERSION"
 
       - name: Check if release exists
@@ -45,14 +48,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view v${{ env.VERSION }}
-          if ($LASTEXITCODE -eq 0) {
+          if gh release view v${{ env.VERSION }}; then
             echo "Release v${{ env.VERSION }} already exists. Skipping build."
-            echo "SKIP_BUILD=true" >> $env:GITHUB_ENV
-          } else {
+            echo "SKIP_BUILD=true" >> $GITHUB_ENV
+          else
             echo "Release v${{ env.VERSION }} not found. Proceeding with build."
-            echo "SKIP_BUILD=false" >> $env:GITHUB_ENV
-          }
+            echo "SKIP_BUILD=false" >> $GITHUB_ENV
+          fi
         continue-on-error: true
 
       - name: Create dummy service_account.json
