@@ -685,7 +685,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.26"
+__version__ = "1.27"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1216,7 +1216,7 @@ del "%~f0"
             table.setColumnCount(9)
             table.setHorizontalHeaderLabels(["선택", "번호", "이름", "아이디", "포트", "카페명", "게시판", "업로드", "다음예약"])
             
-        # table.horizontalHeader().setStretchLastSection(True) # 화면이 작을 때 짤리는 현상 방지
+        table.horizontalHeader().setStretchLastSection(True) # 우측 빈 공간 채우기 및 잘림 방지
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.cellClicked.connect(self.on_table_click) 
         table.cellDoubleClicked.connect(self.on_table_double_click)
@@ -1229,16 +1229,16 @@ del "%~f0"
         table.setSortingEnabled(True)
         
         # 컬럼 너비 최적화 (가로 스크롤 방지 및 잘림 방지)
-        table.setColumnWidth(0, 35)   # 선택
-        table.setColumnWidth(1, 40)   # 번호
-        table.setColumnWidth(2, 95)   # 이름
-        table.setColumnWidth(3, 85)   # 아이디
+        table.setColumnWidth(0, 40)   # 선택
+        table.setColumnWidth(1, 50)   # 번호
+        table.setColumnWidth(2, 130)  # 이름 (짤림 방지)
+        table.setColumnWidth(3, 100)  # 아이디
         table.setColumnWidth(4, 50)   # 포트
-        table.setColumnWidth(5, 140)  # 카페명
-        table.setColumnWidth(6, 130)  # 게시판
+        table.setColumnWidth(5, 160)  # 카페명
+        table.setColumnWidth(6, 140)  # 게시판
         if table_type != "completed":
-            table.setColumnWidth(7, 100)  # 업로드
-            table.setColumnWidth(8, 160)  # 다음예약 (스트레치로 채워짐)
+            table.setColumnWidth(7, 120)  # 업로드
+            # 8번 다음예약은 setStretchLastSection(True)에 의해 남은 공간을 모두 채움
 
     def on_table_context_menu(self, pos, table):
         from PySide6.QtWidgets import QMenu
