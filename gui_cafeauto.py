@@ -685,7 +685,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.24"
+__version__ = "1.25"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1137,7 +1137,7 @@ del "%~f0"
         right_layout.addWidget(right_splitter)
         
         splitter.addWidget(right_panel)
-        splitter.setSizes([900, 500]) # 좌우 너비 조정
+        splitter.setSizes([880, 580]) # 좌우 너비 조정 (다음예약 짤림 방지 및 우측 표 스크롤 방지)
         
         layout.addWidget(splitter, 1) # 스트레치 1 추가 (하단 공백 제거)
 
@@ -1228,17 +1228,17 @@ del "%~f0"
         # [추가] 정렬 기능 활성화
         table.setSortingEnabled(True)
         
-        # 컬럼 너비 조정 (불필요한 여백 축소 및 짤리는 컬럼 확대)
-        table.setColumnWidth(0, 40)   # 선택
-        table.setColumnWidth(1, 45)   # 번호
-        table.setColumnWidth(2, 110)  # 이름 (여백 축소)
-        table.setColumnWidth(3, 90)   # 아이디 (여백 축소)
+        # 컬럼 너비 최적화 (가로 스크롤 방지 및 잘림 방지)
+        table.setColumnWidth(0, 35)   # 선택
+        table.setColumnWidth(1, 40)   # 번호
+        table.setColumnWidth(2, 95)   # 이름
+        table.setColumnWidth(3, 85)   # 아이디
         table.setColumnWidth(4, 50)   # 포트
-        table.setColumnWidth(5, 170)  # 카페명 (텍스트 짤림 방지)
-        table.setColumnWidth(6, 160)  # 게시판
+        table.setColumnWidth(5, 140)  # 카페명
+        table.setColumnWidth(6, 130)  # 게시판
         if table_type != "completed":
-            table.setColumnWidth(7, 130)  # 업로드 (여백 축소)
-            table.setColumnWidth(8, 160)  # 다음예약
+            table.setColumnWidth(7, 100)  # 업로드
+            table.setColumnWidth(8, 160)  # 다음예약 (스트레치로 채워짐)
 
     def on_table_context_menu(self, pos, table):
         from PySide6.QtWidgets import QMenu
