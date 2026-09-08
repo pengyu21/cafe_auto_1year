@@ -5,7 +5,7 @@ a = Analysis(
     ['gui_cafeauto.py'],
     pathex=[],
     binaries=[],
-    datas=[('service_account.json', '.')],
+    datas=[],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

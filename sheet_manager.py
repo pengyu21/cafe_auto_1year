@@ -12,8 +12,13 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1LNB7mhszGpWRPrIIh7YZz0Rcdmx
 
 def get_resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
+    # 1. 실행 파일이 위치한 현재 폴더(Local) 우선 확인
+    local_path = os.path.join(os.path.abspath("."), relative_path)
+    if os.path.exists(local_path):
+        return local_path
+        
+    # 2. 없으면 PyInstaller 임시 폴더에서 찾음
     try:
-        # Constants removed, will be instance variables
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
