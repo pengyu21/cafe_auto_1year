@@ -8,6 +8,7 @@ on:
       - 'gui_cafeauto.py'
       - 'navercafe_auto.py'
       - 'sheet_manager.py'
+      - 'NaverCafeAuto.spec'
       - '.github/workflows/auto-build.yml'
   workflow_dispatch:
 
