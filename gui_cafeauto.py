@@ -685,7 +685,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.25"
+__version__ = "1.26"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -774,9 +774,9 @@ class MainApp(QMainWindow):
 
         bat_content = f"""@echo off
 timeout /t 2 /nobreak >nul
-del "{exe_name}"
-ren "{temp_file_path}" "{os.path.basename(exe_name)}"
-start "" "{exe_name}"
+copy /y "{temp_file_path}" "{exe_name}" >nul
+del "{temp_file_path}"
+explorer.exe "{exe_name}"
 del "%~f0"
 """
         with open(bat_path, "w", encoding="euc-kr") as f:
@@ -1137,7 +1137,7 @@ del "%~f0"
         right_layout.addWidget(right_splitter)
         
         splitter.addWidget(right_panel)
-        splitter.setSizes([880, 580]) # 좌우 너비 조정 (다음예약 짤림 방지 및 우측 표 스크롤 방지)
+        splitter.setSizes([1050, 450]) # 좌우 너비 조정 (좌측 패널을 더 넓게)
         
         layout.addWidget(splitter, 1) # 스트레치 1 추가 (하단 공백 제거)
 
@@ -1216,7 +1216,7 @@ del "%~f0"
             table.setColumnCount(9)
             table.setHorizontalHeaderLabels(["선택", "번호", "이름", "아이디", "포트", "카페명", "게시판", "업로드", "다음예약"])
             
-        table.horizontalHeader().setStretchLastSection(True)
+        # table.horizontalHeader().setStretchLastSection(True) # 화면이 작을 때 짤리는 현상 방지
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.cellClicked.connect(self.on_table_click) 
         table.cellDoubleClicked.connect(self.on_table_double_click)
