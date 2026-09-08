@@ -685,7 +685,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.19"
+__version__ = "1.20"
 
 class MainApp(QMainWindow):
     def __init__(self):

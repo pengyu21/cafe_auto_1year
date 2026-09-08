@@ -921,15 +921,22 @@ class NaverCafeBot:
                 except:
                     # 2. Custom Modal (DOM 엘리먼트) 처리
                     try:
-                        # 팝업 내의 '확인' 버튼 찾기
-                        confirm_btn = WebDriverWait(self.driver, 2).until(
-                            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), '확인')] | //a[contains(text(), '확인')] | //*[contains(@class, 'layer') or contains(@class, 'modal')]//button[contains(., '확인')]"))
-                        )
-                        self.driver.execute_script("arguments[0].click();", confirm_btn)
-                        print("-> 전체공개 확인 모달 '확인' 버튼 클릭 성공")
-                        time.sleep(1)
+                        modal_clicked = False
+                        for _ in range(5):
+                            confirm_btns = self.driver.find_elements(By.XPATH, "//button[contains(., '확인')] | //a[contains(., '확인')] | //*[contains(@class, 'layer') or contains(@class, 'modal') or contains(@class, 'popup')]//button[contains(., '확인')] | //*[contains(@class, 'BaseButton') and contains(., '확인')]")
+                            for c_btn in confirm_btns:
+                                if c_btn.is_displayed():
+                                    self.driver.execute_script("arguments[0].click();", c_btn)
+                                    print("-> 전체공개 확인 모달 '확인' 버튼 클릭 성공")
+                                    modal_clicked = True
+                                    break
+                            if modal_clicked:
+                                break
+                            time.sleep(1)
+                        if not modal_clicked:
+                            print("-> 추가 모달 없음 (정상 진행)")
                     except Exception as modal_e:
-                        print("-> 추가 모달 없음 (정상 진행)")
+                        print("-> 모달 처리 중 에러 발생 (무시)")
                 
                 # 등록 후 처리 대기
                 time.sleep(2)
@@ -945,12 +952,18 @@ class NaverCafeBot:
                     
                     time.sleep(1)
                     try:
-                        confirm_btn = WebDriverWait(self.driver, 2).until(
-                            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), '확인')] | //a[contains(text(), '확인')]"))
-                        )
-                        self.driver.execute_script("arguments[0].click();", confirm_btn)
-                        print("-> (백업) 전체공개 확인 모달 '확인' 버튼 클릭 성공")
-                        time.sleep(1)
+                        modal_clicked = False
+                        for _ in range(5):
+                            confirm_btns = self.driver.find_elements(By.XPATH, "//button[contains(., '확인')] | //a[contains(., '확인')]")
+                            for c_btn in confirm_btns:
+                                if c_btn.is_displayed():
+                                    self.driver.execute_script("arguments[0].click();", c_btn)
+                                    print("-> (백업) 전체공개 확인 모달 '확인' 버튼 클릭 성공")
+                                    modal_clicked = True
+                                    break
+                            if modal_clicked:
+                                break
+                            time.sleep(1)
                     except:
                         pass
                 except:
