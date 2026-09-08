@@ -15,6 +15,9 @@ from PySide6.QtGui import QIcon, QFont, QAction, QColor, QDesktopServices, QIntV
 from sheet_manager import GoogleSheetManager
 from navercafe_auto import NaverCafeBot
 import json
+import urllib.request
+import urllib.error
+import subprocess
 
 def get_data_dir():
     import os
@@ -618,8 +621,71 @@ class TaskLoaderThread(QThread):
         except Exception as e:
             self.errorOccurred.emit(str(e))
 
+class UpdateCheckThread(QThread):
+    update_available = Signal(str, str) # version, download_url
+    error_occurred = Signal(str)
 
-__version__ = "1.1.8"
+    def run(self):
+        try:
+            url = "https://api.github.com/repos/pengyu21/cafe_auto_1year/releases/latest"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                
+                latest_version = data.get('tag_name', '')
+                if latest_version.startswith('v'):
+                    latest_version = latest_version[1:]
+                
+                assets = data.get('assets', [])
+                download_url = ""
+                for asset in assets:
+                    if asset['name'].lower().endswith('.exe'):
+                        download_url = asset['browser_download_url']
+                        break
+                        
+                if latest_version and download_url:
+                    self.update_available.emit(latest_version, download_url)
+        except urllib.error.HTTPError as e:
+            if e.code != 404: # 404 means no release found, ignore.
+                self.error_occurred.emit(f"HTTP Error: {e.code}")
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+class UpdateDownloadThread(QThread):
+    progress = Signal(int)
+    finished = Signal(str) # temporary file path
+    error_occurred = Signal(str)
+
+    def __init__(self, download_url):
+        super().__init__()
+        self.download_url = download_url
+
+    def run(self):
+        try:
+            temp_file = "NaverCafeAuto_update.exe"
+            
+            req = urllib.request.Request(self.download_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=15) as response:
+                total_size = int(response.headers.get('content-length', 0))
+                downloaded = 0
+                block_size = 8192
+                with open(temp_file, 'wb') as f:
+                    while True:
+                        buffer = response.read(block_size)
+                        if not buffer:
+                            break
+                        f.write(buffer)
+                        downloaded += len(buffer)
+                        if total_size > 0:
+                            percent = int((downloaded / total_size) * 100)
+                            self.progress.emit(percent)
+                            
+            self.finished.emit(temp_file)
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+
+__version__ = "1.19"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -644,6 +710,80 @@ class MainApp(QMainWindow):
         QTimer.singleShot(100, self.load_tasks)
         self.first_load_completed = False
         
+        # 업데이트 체크 (비동기)
+        QTimer.singleShot(500, self.check_for_updates)
+        
+    def check_for_updates(self):
+        self.update_checker = UpdateCheckThread()
+        self.update_checker.update_available.connect(self.on_update_available)
+        self.update_checker.start()
+
+    def on_update_available(self, latest_version, download_url):
+        current_version = __version__
+        def parse_version(v):
+            try:
+                return tuple(map(int, (v.split("."))))
+            except:
+                return (0,0,0)
+                
+        if parse_version(latest_version) > parse_version(current_version):
+            reply = QMessageBox.question(self, '업데이트 알림', 
+                f"새로운 버전(v{latest_version})이 출시되었습니다. (현재 버전: v{current_version})\n\n지금 업데이트하시겠습니까?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                
+            if reply == QMessageBox.Yes:
+                self.start_download(download_url)
+                
+    def start_download(self, download_url):
+        self.progress_dialog = QDialog(self)
+        self.progress_dialog.setWindowTitle("업데이트 다운로드 중")
+        self.progress_dialog.setFixedSize(400, 100)
+        self.progress_dialog.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        
+        layout = QVBoxLayout(self.progress_dialog)
+        layout.addWidget(QLabel("최신 버전을 다운로드하고 있습니다. 잠시만 기다려주세요..."))
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        layout.addWidget(self.progress_bar)
+        
+        self.progress_dialog.setModal(True)
+        self.progress_dialog.show()
+        
+        self.downloader = UpdateDownloadThread(download_url)
+        self.downloader.progress.connect(self.progress_bar.setValue)
+        self.downloader.finished.connect(self.on_download_finished)
+        self.downloader.error_occurred.connect(self.on_download_error)
+        self.downloader.start()
+
+    def on_download_error(self, err_msg):
+        if hasattr(self, 'progress_dialog'):
+            self.progress_dialog.accept()
+        QMessageBox.warning(self, "업데이트 오류", f"다운로드 중 오류가 발생했습니다.\n\n{err_msg}")
+
+    def on_download_finished(self, temp_file_path):
+        if hasattr(self, 'progress_dialog'):
+            self.progress_dialog.accept()
+            
+        bat_path = "update_script.bat"
+        exe_name = sys.executable
+        
+        if not exe_name.lower().endswith(".exe") or "python" in exe_name.lower():
+            QMessageBox.information(self, "업데이트 준비 완료", "스크립트 모드이므로 파일을 교체하지 않고 종료합니다.")
+            return
+
+        bat_content = f"""@echo off
+timeout /t 2 /nobreak >nul
+del "{exe_name}"
+ren "{temp_file_path}" "{os.path.basename(exe_name)}"
+start "" "{exe_name}"
+del "%~f0"
+"""
+        with open(bat_path, "w", encoding="euc-kr") as f:
+            f.write(bat_content)
+            
+        subprocess.Popen([bat_path], shell=True)
+        QApplication.quit()
         
     def apply_stylesheet(self):
         # 모던한 스타일시트 적용
