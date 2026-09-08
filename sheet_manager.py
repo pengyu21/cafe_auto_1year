@@ -12,12 +12,30 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1LNB7mhszGpWRPrIIh7YZz0Rcdmx
 
 def get_resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
-    # 1. 실행 파일이 위치한 현재 폴더(Local) 우선 확인
-    local_path = os.path.join(os.path.abspath("."), relative_path)
-    if os.path.exists(local_path):
-        return local_path
+    import sys
+    import os
+    
+    paths_to_check = []
+    
+    # 1. Directory of the executable or script
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.dirname(sys.executable)
+        paths_to_check.append(exe_dir)
+        paths_to_check.append(os.path.dirname(exe_dir)) # In case exe is in dist/
+    else:
+        exe_dir = os.path.dirname(os.path.abspath(__file__))
+        paths_to_check.append(exe_dir)
         
-    # 2. 없으면 PyInstaller 임시 폴더에서 찾음
+    # 2. Current working directory
+    paths_to_check.append(os.path.abspath("."))
+    
+    # Search all locations
+    for base_dir in paths_to_check:
+        full_path = os.path.join(base_dir, relative_path)
+        if os.path.exists(full_path):
+            return full_path
+            
+    # 3. Fallback to PyInstaller temp folder
     try:
         base_path = sys._MEIPASS
     except Exception:
