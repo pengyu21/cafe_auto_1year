@@ -1,0 +1,75 @@
+name: Build and Release EXE
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'gui_cafeauto.py'
+      - 'navercafe_auto.py'
+      - 'sheet_manager.py'
+      - '.github/workflows/auto-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Extract Version
+        id: extract_version
+        run: |
+          # 파이썬 코드를 실행하여 버전 추출
+          $VERSION = python -c "import re; print(re.search(r'__version__ = \"(.*?)\"', open('gui_cafeauto.py', encoding='utf-8').read()).group(1))"
+          echo "VERSION=$VERSION" >> $env:GITHUB_ENV
+          echo "Extracted version: $VERSION"
+
+      - name: Check if release exists
+        id: check_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view v${{ env.VERSION }}
+          if ($LASTEXITCODE -eq 0) {
+            echo "Release v${{ env.VERSION }} already exists. Skipping build."
+            echo "SKIP_BUILD=true" >> $env:GITHUB_ENV
+          } else {
+            echo "Release v${{ env.VERSION }} not found. Proceeding with build."
+            echo "SKIP_BUILD=false" >> $env:GITHUB_ENV
+          }
+        continue-on-error: true
+
+      - name: Create dummy service_account.json
+        if: env.SKIP_BUILD == 'false'
+        run: |
+          # 빌드를 통과시키기 위한 더미 파일 생성
+          # 사용자가 실제 파일을 사용할 때는 이 더미 파일을 무시하고 동일 경로의 파일을 우선 로드합니다.
+          echo "{}" > service_account.json
+
+      - name: Build EXE with PyInstaller
+        if: env.SKIP_BUILD == 'false'
+        run: |
+          pyinstaller --noconfirm --clean NaverCafeAuto.spec
+
+      - name: Create Release and Upload EXE
+        if: env.SKIP_BUILD == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create v${{ env.VERSION }} dist/NaverCafeAuto.exe -t "v${{ env.VERSION }}" -n "Auto-generated release for version v${{ env.VERSION }}"
