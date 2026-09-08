@@ -867,12 +867,29 @@ class NaverCafeBot:
                     # 없으면 패스 (이미 열려있거나)
                     pass 
                 
-                # 2. 전체공개 라벨 클릭 (JS 클릭 시도)
-                all_label = WebDriverWait(self.driver, 2).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "label[for='all']"))
-                )
-                self.driver.execute_script("arguments[0].click();", all_label)
-                print("-> 전체공개(label for='all') 클릭 성공 (JS)")
+                # 2. 전체공개 라벨 클릭 (다양한 선택자 시도)
+                locators_all = [
+                    (By.CSS_SELECTOR, "label[for='all']"),
+                    (By.XPATH, "//label[contains(text(), '전체공개')]"),
+                    (By.XPATH, "//span[contains(text(), '전체공개')]"),
+                    (By.XPATH, "//button[contains(text(), '전체공개')]")
+                ]
+                
+                all_clicked = False
+                for by, val in locators_all:
+                    try:
+                        all_label = WebDriverWait(self.driver, 1).until(
+                            EC.presence_of_element_located((by, val))
+                        )
+                        self.driver.execute_script("arguments[0].click();", all_label)
+                        print(f"-> 전체공개({val}) 클릭 성공 (JS)")
+                        all_clicked = True
+                        break
+                    except:
+                        pass
+                
+                if not all_clicked:
+                    print("-> 전체공개 설정을 찾지 못했습니다.")
             except Exception as e:
                 print(f"-> 전체공개 설정 실패: {e}") 
 
@@ -892,19 +909,50 @@ class NaverCafeBot:
                 self.driver.execute_script("arguments[0].click();", pub_btn)
                 print("-> 등록 버튼(BaseButton--skinGreen) 클릭 성공 (JS)")
                 
+                # 등록 후 모달/Alert 처리 (예: "이 글은 전체공개로 설정되어 있어요...")
+                time.sleep(1)
+                try:
+                    # 1. Native Alert 처리
+                    WebDriverWait(self.driver, 1).until(EC.alert_is_present())
+                    alert = self.driver.switch_to.alert
+                    alert.accept()
+                    print("-> 네이티브 Alert 확인 클릭")
+                    time.sleep(1)
+                except:
+                    # 2. Custom Modal (DOM 엘리먼트) 처리
+                    try:
+                        # 팝업 내의 '확인' 버튼 찾기
+                        confirm_btn = WebDriverWait(self.driver, 2).until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), '확인')] | //a[contains(text(), '확인')] | //*[contains(@class, 'layer') or contains(@class, 'modal')]//button[contains(., '확인')]"))
+                        )
+                        self.driver.execute_script("arguments[0].click();", confirm_btn)
+                        print("-> 전체공개 확인 모달 '확인' 버튼 클릭 성공")
+                        time.sleep(1)
+                    except Exception as modal_e:
+                        print("-> 추가 모달 없음 (정상 진행)")
+                
                 # 등록 후 처리 대기
                 time.sleep(2)
                 
             except Exception as e:
                 print(f"-> 등록 버튼 처리 중 에러: {e}")
                 
-
-                
                 # 백업: 기존 방식
                 try:
                     print("-> 백업 등록 버튼 시도")
                     btn = self.driver.find_element(By.XPATH, "//button[contains(text(), '등록')]")
                     btn.click()
+                    
+                    time.sleep(1)
+                    try:
+                        confirm_btn = WebDriverWait(self.driver, 2).until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), '확인')] | //a[contains(text(), '확인')]"))
+                        )
+                        self.driver.execute_script("arguments[0].click();", confirm_btn)
+                        print("-> (백업) 전체공개 확인 모달 '확인' 버튼 클릭 성공")
+                        time.sleep(1)
+                    except:
+                        pass
                 except:
                     return None
 
@@ -913,10 +961,15 @@ class NaverCafeBot:
 
             time.sleep(3)
             
-            # 등록 완료 후 URL 가져오기
-            # 등록 완료 후 처리 대기
-            time.sleep(2)
-            
+            # 등록 완료 후 URL 변경 대기 (write 주소에서 빠져나오는지 확인)
+            print("페이지 이동(업로드 완료) 대기 중...")
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    lambda driver: "write" not in driver.current_url.lower()
+                )
+            except:
+                print("-> [경고] 10초 대기 후에도 URL이 변경되지 않았습니다. 업로드가 지연되거나 실패했을 수 있습니다.")
+                
             final_url = self.driver.current_url
             
             # 7. URL 복사 버튼 클릭 시도 (Clean URL)
@@ -984,6 +1037,11 @@ class NaverCafeBot:
                     
             except Exception as e:
                 print(f"URL 복사 로직 에러 (기존 URL 사용): {e}")
+
+            # 최종적으로 구한 URL이 여전히 글쓰기(write) 페이지라면 실패로 간주
+            if "write" in final_url.lower():
+                print(f"-> [오류] 게시글 업로드 실패 (URL이 글쓰기 주소에 머물러 있음): {final_url}")
+                return None
 
             return final_url
 
