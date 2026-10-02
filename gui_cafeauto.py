@@ -26,6 +26,33 @@ AUTO_RESET_MIN_GAP_MIN = 10
 # 자동 리셋 시 하루에 배정할 1차 업로드 최대 인원 (이미 예약된 1차 포함)
 AUTO_RESET_DAILY_MAX = 5
 
+def reset_countdown(last_upload, remain_count):
+    """자동 리셋까지 남은 일수 표시 문자열과 정렬 키 반환 (정렬 키 None = 리셋 대상 아님)"""
+    from datetime import datetime, timedelta
+    if str(remain_count).strip() != '0' or not last_upload:
+        return "-", None
+    try:
+        last_dt = datetime.strptime(last_upload, "%Y-%m-%d %H:%M") if len(last_upload) > 10 else datetime.strptime(last_upload, "%Y-%m-%d")
+    except ValueError:
+        return "-", None
+    reset_dt = last_dt + timedelta(days=AUTO_RESET_DAYS)
+    days_left = (reset_dt.date() - datetime.now().date()).days
+    if datetime.now() >= reset_dt:
+        return "리셋 대기", 0
+    return f"D-{days_left} ({reset_dt:%m-%d})", days_left
+
+class SortableItem(QTableWidgetItem):
+    """표시 문자열과 별도의 정렬 키로 정렬되는 셀 (키 없는 셀은 맨 뒤)"""
+    def __init__(self, text, sort_key):
+        super().__init__(text)
+        self.sort_key = sort_key
+
+    def __lt__(self, other):
+        a = self.sort_key if self.sort_key is not None else float('inf')
+        b = getattr(other, 'sort_key', None)
+        b = b if b is not None else float('inf')
+        return a < b
+
 def get_data_dir():
     import os
     user_profile = os.environ.get('USERPROFILE', os.path.expanduser('~'))
@@ -698,7 +725,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.30"
+__version__ = "1.31"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1243,8 +1270,8 @@ del "%~f0"
 
     def setup_table(self, table, table_type="ready"):
         if table_type == "completed":
-            table.setColumnCount(8)
-            table.setHorizontalHeaderLabels(["선택", "번호", "이름", "아이디", "포트", "카페명", "게시판", "마지막업로드"])
+            table.setColumnCount(9)
+            table.setHorizontalHeaderLabels(["선택", "번호", "이름", "아이디", "포트", "카페명", "게시판", "마지막업로드", "리셋까지"])
         else:
             table.setColumnCount(9)
             table.setHorizontalHeaderLabels(["선택", "번호", "이름", "아이디", "포트", "카페명", "게시판", "업로드", "다음예약"])
@@ -1269,7 +1296,9 @@ del "%~f0"
         table.setColumnWidth(4, 50)   # 포트
         table.setColumnWidth(5, 160)  # 카페명
         table.setColumnWidth(6, 140)  # 게시판
-        if table_type != "completed":
+        if table_type == "completed":
+            table.setColumnWidth(7, 130)  # 마지막업로드 (8번 리셋까지는 남은 공간 채움)
+        else:
             table.setColumnWidth(7, 120)  # 업로드
             # 8번 다음예약은 setStretchLastSection(True)에 의해 남은 공간을 모두 채움
 
@@ -1593,6 +1622,14 @@ del "%~f0"
                     item_last = QTableWidgetItem(task.get('last_upload') or "-")
                     item_last.setTextAlignment(Qt.AlignCenter)
                     table.setItem(r, 7, item_last)
+
+                    # 8. 자동 리셋까지 남은 일수 (마지막 업로드 + AUTO_RESET_DAYS)
+                    text, sort_key = reset_countdown(task.get('last_upload', ''), task.get('remain_count'))
+                    item_reset = SortableItem(text, sort_key)
+                    item_reset.setTextAlignment(Qt.AlignCenter)
+                    if sort_key is not None and sort_key <= 7:
+                        item_reset.setForeground(QColor("#e67e22" if sort_key > 0 else "#e74c3c"))
+                    table.setItem(r, 8, item_reset)
                     continue
 
                 # 7. 업로드 (남은 주기 표시)
