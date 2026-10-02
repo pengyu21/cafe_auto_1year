@@ -9,7 +9,9 @@ on:
       - 'navercafe_auto.py'
       - 'sheet_manager.py'
       - 'NaverCafeAuto.spec'
+      - 'CHANGELOG.md'
       - '.github/workflows/auto-build.yml'
+      - '.github/scripts/release_notes.py'
   workflow_dispatch:
 
 permissions:
@@ -44,6 +46,11 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Extracted version: $VERSION"
 
+      - name: Generate release notes and version.txt
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python .github/scripts/release_notes.py "${{ env.VERSION }}"
+
       - name: Check if release exists
         id: check_release
         env:
@@ -68,4 +75,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create v${{ env.VERSION }} dist/NaverCafeAuto.exe -t "v${{ env.VERSION }}" -n "Auto-generated release for version v${{ env.VERSION }}"
+          gh release create v${{ env.VERSION }} dist/NaverCafeAuto.exe -t "v${{ env.VERSION }}" --notes-file ".release_notes/v${{ env.VERSION }}.md"
+
+      - name: Sync release notes from CHANGELOG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # CHANGELOG에 있는 버전의 릴리스 설명을 모두 최신 내용으로 맞춤 (없는 릴리스는 건너뜀)
+          for f in .release_notes/*.md; do
+            tag=$(basename "$f" .md)
+            gh release edit "$tag" --notes-file "$f" >/dev/null 2>&1 && echo "Updated notes: $tag" || true
+          done
+
+      - name: Commit version.txt
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.txt
+          if git diff --cached --quiet; then
+            echo "version.txt unchanged"
+          else
+            git commit -m "Update version.txt to v${{ env.VERSION }}"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
