@@ -641,9 +641,11 @@ class GoogleSheetManager:
             
             # Constants removed, will be instance variables
             # Constants removed, will be instance variables
+            # 4칸을 한 번에 비움 (칸별로 지우다 API 한도에 걸려 일부만 지워지는 문제 방지)
+            from gspread.utils import rowcol_to_a1
             sched_cols = [self.COL_SCHED_1, self.COL_SCHED_2, self.COL_SCHED_3, self.COL_SCHED_4]
-            for col_idx in sched_cols:
-                self.task_sheet.update_cell(target_row, col_idx + 1, "")
+            a1_range = f"{rowcol_to_a1(target_row, sched_cols[0] + 1)}:{rowcol_to_a1(target_row, sched_cols[-1] + 1)}"
+            self.task_sheet.batch_update([{'range': a1_range, 'values': [[""] * len(sched_cols)]}])
             
             # Constants removed, will be instance variables
             # Constants removed, will be instance variables
@@ -667,6 +669,77 @@ class GoogleSheetManager:
         except Exception as e:
             print(f"Error resetting task row {row_index}: {e}")
             return False
+
+    def _get_total_stages(self, row):
+        """행의 단계(G열)와 업로드 수(H열)로 총 업로드 횟수 계산 (get_tasks와 동일한 규칙)"""
+        preset_str = str(row[self.COL_PRESET]) if len(row) > self.COL_PRESET else ""
+        preset_cnt = len(preset_str.split(',')) if "," in preset_str else 1
+        h_val = str(row[self.COL_UPLOAD_CNT]).strip() if len(row) > self.COL_UPLOAD_CNT else ""
+        if h_val.isdigit():
+            return max(preset_cnt, int(h_val))
+        if '/' in h_val:
+            parts = h_val.split('/')
+            if len(parts) == 2 and parts[1].strip().isdigit():
+                return max(preset_cnt, int(parts[1].strip()))
+        return preset_cnt
+
+    def build_stage_dates(self, preset_str, total_stages, first_dt):
+        """1차 시각을 기준으로 1~4차 일정 문자열 4개 생성 (update_date_manual과 같은 주기 계산)"""
+        preset_str = str(preset_str or "").strip()
+        periods = [p.strip() for p in preset_str.split(',')] if preset_str else []
+        p0 = periods[0] if periods else "2주"
+        base_date = first_dt - timedelta(days=self.get_days_from_period(p0))
+
+        dates = []
+        for i in range(4):
+            if i >= total_stages:
+                dates.append("")
+            elif i == 0:
+                dates.append(first_dt.strftime("%Y-%m-%d %H:%M"))
+            else:
+                p_name = periods[i] if i < len(periods) else (periods[-1] if periods else "2주")
+                target = base_date + timedelta(days=self.get_days_from_period(p_name))
+                target = target.replace(hour=random.randint(10, 20), minute=random.randint(0, 59))
+                dates.append(target.strftime("%Y-%m-%d %H:%M"))
+        return dates
+
+    def bulk_reset_and_schedule(self, plans):
+        """완료 작업 여러 개를 리셋하고 1~4차 일정을 기입 (읽기 1회 + 쓰기 1회로 처리해 API 한도 초과/부분 삭제 방지)
+        plans: [{'row_index', 'id', 'cafe_name', 'board_name', 'first_dt'}]
+        반환: {row_index: (성공여부, 일정목록 또는 실패사유)}
+        """
+        from gspread.utils import rowcol_to_a1
+        results = {}
+        rows = self.task_sheet.get_all_values()
+        sched_cols = [self.COL_SCHED_1, self.COL_SCHED_2, self.COL_SCHED_3, self.COL_SCHED_4]
+        data = []
+
+        for plan in plans:
+            r = plan['row_index']
+            row = list(rows[r - 1]) if r - 1 < len(rows) else []
+            row += [""] * (max(sched_cols + [self.COL_REMAIN_CNT]) + 1 - len(row))
+
+            # 같은 아이디가 여러 행에 있을 수 있으므로 아이디+카페명+게시판으로 행 확인
+            if (row[self.COL_ID] != plan['id'] or row[self.COL_CAFE_NAME] != plan['cafe_name']
+                    or row[self.COL_BOARD_NAME] != plan['board_name']):
+                results[r] = (False, "행 정보 불일치 (시트가 변경됨)")
+                continue
+            if str(row[self.COL_REMAIN_CNT]).strip() != '0':
+                results[r] = (False, "이미 완료 상태가 아님")
+                continue
+
+            dates = self.build_stage_dates(row[self.COL_PRESET], self._get_total_stages(row), plan['first_dt'])
+            a1_range = f"{rowcol_to_a1(r, sched_cols[0] + 1)}:{rowcol_to_a1(r, sched_cols[-1] + 1)}"
+            data.append({'range': a1_range, 'values': [dates]})
+            results[r] = (True, dates)
+
+        if data:
+            try:
+                self.task_sheet.batch_update(data)
+            except Exception as e:
+                # 한 번에 쓰므로 실패 시 어떤 행도 변경되지 않음
+                return {r: (False, f"시트 쓰기 실패: {e}") if ok else (ok, v) for r, (ok, v) in results.items()}
+        return results
 
     def update_ports_bulk(self, port_updates):
         """포트 번호를 일괄 업데이트 (API 1회 호출)

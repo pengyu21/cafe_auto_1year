@@ -23,6 +23,8 @@ import subprocess
 AUTO_RESET_DAYS = 90
 # 자동 리셋 시 1차 예약끼리 최소 간격(분)
 AUTO_RESET_MIN_GAP_MIN = 10
+# 자동 리셋 시 하루에 배정할 1차 업로드 최대 인원 (이미 예약된 1차 포함)
+AUTO_RESET_DAILY_MAX = 5
 
 def get_data_dir():
     import os
@@ -696,7 +698,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.29"
+__version__ = "1.30"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1865,12 +1867,11 @@ del "%~f0"
 
 
     def auto_reset_old_completed(self, tasks):
-        """N열(남은 업로드)이 0이고 마지막 업로드 후 AUTO_RESET_DAYS일이 지난 작업을 리셋하고 1차 일정을 기입"""
+        """N열(남은 업로드)이 0이고 마지막 업로드 후 AUTO_RESET_DAYS일이 지난 작업을 리셋하고 1~4차 일정을 기입"""
         from datetime import datetime, timedelta
         now = datetime.now()
-        reset_any = False
-        assigned_times = [] # 이번에 배정한 1차 시각 (서로 겹치지 않게)
 
+        targets = []
         for task in tasks:
             if not task.get('is_completed'): continue
             if str(task.get('remain_count', '')).strip() != '0': continue
@@ -1882,39 +1883,65 @@ del "%~f0"
             except ValueError:
                 continue
             if now - last_dt < timedelta(days=AUTO_RESET_DAYS): continue
+            targets.append((last_dt, task))
 
-            self.update_log_signal(f"[{task['name']}] 마지막 업로드({last_upload}) 후 {AUTO_RESET_DAYS}일 경과 → 자동 리셋")
-            if not self.sheet_mgr.reset_task(task['row_index'], task.get('id')):
-                self.update_log_signal(f"   [{task['name']}] 자동 리셋 실패")
-                continue
+        if not targets:
+            return False
 
-            # 1차 일정을 현재 이후 랜덤 시각으로 기입 (2차 이후는 update_date_manual이 주기에 맞춰 자동 계산)
-            first_dt = self._pick_random_upload_time(now, assigned_times)
+        # 날짜별 이미 예약된 1차 업로드 수 (하루 최대 인원 계산용)
+        day_counts = {}
+        for t in tasks:
+            if t.get('is_completed') or t.get('current_stage_idx') != 0: continue
+            nr = str(t.get('next_run', '')).strip()
+            if nr:
+                day_counts[nr[:10]] = day_counts.get(nr[:10], 0) + 1
+
+        # 오래된 사람부터 빠른 날짜에 배정
+        targets.sort(key=lambda x: x[0])
+        assigned_times = [] # 이번에 배정한 1차 시각 (서로 겹치지 않게)
+        plans = []
+        for last_dt, task in targets:
+            first_dt = self._pick_random_upload_time(now, assigned_times, day_counts)
             assigned_times.append(first_dt)
-            first_date = first_dt.strftime("%Y-%m-%d %H:%M")
-            self.sheet_mgr.update_date_manual(task['row_index'], first_date, task.get('id'), stage_index=0)
-            self.update_log_signal(f"   [{task['name']}] 1차 예약 기입: {first_date}")
-            reset_any = True
+            day_key = first_dt.strftime("%Y-%m-%d")
+            day_counts[day_key] = day_counts.get(day_key, 0) + 1
+            plans.append({'row_index': task['row_index'], 'id': task.get('id', ''),
+                          'cafe_name': task.get('cafe_name', ''), 'board_name': task.get('board_name', ''),
+                          'first_dt': first_dt, 'name': task['name'], 'last_upload': task.get('last_upload', '')})
 
+        self.update_log_signal(f">>> 마지막 업로드 후 {AUTO_RESET_DAYS}일 지난 완료 작업 {len(plans)}개 자동 리셋 (하루 최대 {AUTO_RESET_DAILY_MAX}명)")
+        results = self.sheet_mgr.bulk_reset_and_schedule(plans)
+
+        reset_any = False
+        for plan in plans:
+            ok, info = results.get(plan['row_index'], (False, "결과 없음"))
+            if ok:
+                reset_any = True
+                sched = " / ".join(d for d in info if d)
+                self.update_log_signal(f"   [{plan['name']}] {plan['cafe_name']} (마지막 {plan['last_upload']}) → {sched}")
+            else:
+                self.update_log_signal(f"   [{plan['name']}] {plan['cafe_name']} 자동 리셋 건너뜀: {info}")
         return reset_any
 
-    def _pick_random_upload_time(self, now, assigned_times):
-        """현재 이후, 업로드 시간대(07:00~23:59) 안에서 이미 배정된 시각과 최소 간격 이상 떨어진 랜덤 시각 반환"""
+    def _pick_random_upload_time(self, now, assigned_times, day_counts=None):
+        """현재 이후, 업로드 시간대(07:00~23:59) 안에서 하루 최대 인원을 넘지 않고
+        이미 배정된 시각과 최소 간격 이상 떨어진 랜덤 시각 반환"""
         import random
         from datetime import timedelta
+        day_counts = day_counts or {}
         min_gap = timedelta(minutes=AUTO_RESET_MIN_GAP_MIN)
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         while True:
             win_start = max(day.replace(hour=7), now + timedelta(minutes=5))
             win_end = day.replace(hour=23, minute=59)
-            if win_start < win_end:
+            if win_start < win_end and day_counts.get(day.strftime("%Y-%m-%d"), 0) < AUTO_RESET_DAILY_MAX:
                 for _ in range(50):
                     offset = random.randint(0, int((win_end - win_start).total_seconds() // 60))
                     cand = (win_start + timedelta(minutes=offset)).replace(second=0, microsecond=0)
                     if all(abs(cand - t) >= min_gap for t in assigned_times):
                         return cand
-            # 오늘 시간대가 지났거나 꽉 찼으면 다음 날로
+            # 오늘 시간대가 지났거나 인원이 찼으면 다음 날로
             day += timedelta(days=1)
 
     def start_automation(self):
