@@ -23,8 +23,18 @@ import subprocess
 AUTO_RESET_DAYS = 90
 # 자동 리셋 시 1차 예약끼리 최소 간격(분)
 AUTO_RESET_MIN_GAP_MIN = 10
-# 자동 리셋 시 하루에 배정할 1차 업로드 최대 인원 (이미 예약된 1차 포함)
+# 자동 리셋 시 1차를 배정할 날의 최대 예약 수 (이미 잡힌 다른 예약 포함, 달력 기준)
 AUTO_RESET_DAILY_MAX = 5
+
+def count_reservations_by_day(tasks):
+    """날짜(YYYY-MM-DD)별 예약 건수 (달력과 같은 기준: 미완료 작업의 next_run)"""
+    counts = {}
+    for t in tasks:
+        if t.get('is_completed'): continue
+        nr = str(t.get('next_run', '')).strip()
+        if nr:
+            counts[nr[:10]] = counts.get(nr[:10], 0) + 1
+    return counts
 
 def reset_countdown(last_upload, remain_count):
     """자동 리셋까지 남은 일수 표시 문자열과 정렬 키 반환 (정렬 키 None = 리셋 대상 아님)"""
@@ -725,7 +735,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.31"
+__version__ = "1.32"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1925,26 +1935,20 @@ del "%~f0"
         if not targets:
             return False
 
-        # 날짜별 이미 예약된 1차 업로드 수 (하루 최대 인원 계산용)
-        day_counts = {}
-        for t in tasks:
-            if t.get('is_completed') or t.get('current_stage_idx') != 0: continue
-            nr = str(t.get('next_run', '')).strip()
-            if nr:
-                day_counts[nr[:10]] = day_counts.get(nr[:10], 0) + 1
+        # 날짜별 이미 잡힌 예약 수 (달력에 보이는 전체 예약 기준, 하루 최대 인원 계산용)
+        day_counts = count_reservations_by_day(tasks)
 
         # 오래된 사람부터 빠른 날짜에 배정
         targets.sort(key=lambda x: x[0])
         assigned_times = [] # 이번에 배정한 1차 시각 (서로 겹치지 않게)
         plans = []
         for last_dt, task in targets:
-            first_dt = self._pick_random_upload_time(now, assigned_times, day_counts)
-            assigned_times.append(first_dt)
-            day_key = first_dt.strftime("%Y-%m-%d")
-            day_counts[day_key] = day_counts.get(day_key, 0) + 1
+            total = int(task.get('upload_count') or 1)
+            make_dates = lambda dt, p=task.get('period', ''), n=total: self.sheet_mgr.build_stage_dates(p, n, dt)
+            dates = self._pick_stage_dates(now, assigned_times, day_counts, make_dates)
             plans.append({'row_index': task['row_index'], 'id': task.get('id', ''),
                           'cafe_name': task.get('cafe_name', ''), 'board_name': task.get('board_name', ''),
-                          'first_dt': first_dt, 'name': task['name'], 'last_upload': task.get('last_upload', '')})
+                          'dates': dates, 'name': task['name'], 'last_upload': task.get('last_upload', '')})
 
         self.update_log_signal(f">>> 마지막 업로드 후 {AUTO_RESET_DAYS}일 지난 완료 작업 {len(plans)}개 자동 리셋 (하루 최대 {AUTO_RESET_DAILY_MAX}명)")
         results = self.sheet_mgr.bulk_reset_and_schedule(plans)
@@ -1960,26 +1964,35 @@ del "%~f0"
                 self.update_log_signal(f"   [{plan['name']}] {plan['cafe_name']} 자동 리셋 건너뜀: {info}")
         return reset_any
 
-    def _pick_random_upload_time(self, now, assigned_times, day_counts=None):
-        """현재 이후, 업로드 시간대(07:00~23:59) 안에서 하루 최대 인원을 넘지 않고
-        이미 배정된 시각과 최소 간격 이상 떨어진 랜덤 시각 반환"""
+    def _pick_stage_dates(self, now, assigned_times, day_counts, make_dates):
+        """현재 이후 07:00~23:59 중 랜덤 1차 시각을 골라 1~4차 일정을 만들되,
+        모든 단계 날짜의 예약 수가 하루 최대치(AUTO_RESET_DAILY_MAX) 미만인 경우만 채택.
+        채택한 일정은 assigned_times / day_counts에 반영하고 일정 목록을 반환"""
         import random
         from datetime import timedelta
-        day_counts = day_counts or {}
         min_gap = timedelta(minutes=AUTO_RESET_MIN_GAP_MIN)
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        while True:
+        for _ in range(730): # 최대 2년 뒤까지 탐색
             win_start = max(day.replace(hour=7), now + timedelta(minutes=5))
             win_end = day.replace(hour=23, minute=59)
             if win_start < win_end and day_counts.get(day.strftime("%Y-%m-%d"), 0) < AUTO_RESET_DAILY_MAX:
-                for _ in range(50):
+                for _ in range(20):
                     offset = random.randint(0, int((win_end - win_start).total_seconds() // 60))
                     cand = (win_start + timedelta(minutes=offset)).replace(second=0, microsecond=0)
-                    if all(abs(cand - t) >= min_gap for t in assigned_times):
-                        return cand
+                    if not all(abs(cand - t) >= min_gap for t in assigned_times):
+                        continue
+                    dates = make_dates(cand)
+                    stage_days = [d[:10] for d in dates if d]
+                    # 같은 날 여러 단계가 겹치는 경우까지 고려해 날짜별 추가 건수로 확인
+                    if all(day_counts.get(d, 0) + stage_days.count(d) <= AUTO_RESET_DAILY_MAX for d in set(stage_days)):
+                        assigned_times.append(cand)
+                        for d in stage_days:
+                            day_counts[d] = day_counts.get(d, 0) + 1
+                        return dates
             # 오늘 시간대가 지났거나 인원이 찼으면 다음 날로
             day += timedelta(days=1)
+        raise RuntimeError("배정 가능한 날짜를 찾지 못했습니다.")
 
     def start_automation(self):
         selected_real_indices = []

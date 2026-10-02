@@ -705,7 +705,7 @@ class GoogleSheetManager:
 
     def bulk_reset_and_schedule(self, plans):
         """완료 작업 여러 개를 리셋하고 1~4차 일정을 기입 (읽기 1회 + 쓰기 1회로 처리해 API 한도 초과/부분 삭제 방지)
-        plans: [{'row_index', 'id', 'cafe_name', 'board_name', 'first_dt'}]
+        plans: [{'row_index', 'id', 'cafe_name', 'board_name', 'dates'}] (dates: build_stage_dates로 만든 1~4차 일정)
         반환: {row_index: (성공여부, 일정목록 또는 실패사유)}
         """
         from gspread.utils import rowcol_to_a1
@@ -728,7 +728,7 @@ class GoogleSheetManager:
                 results[r] = (False, "이미 완료 상태가 아님")
                 continue
 
-            dates = self.build_stage_dates(row[self.COL_PRESET], self._get_total_stages(row), plan['first_dt'])
+            dates = plan['dates']
             a1_range = f"{rowcol_to_a1(r, sched_cols[0] + 1)}:{rowcol_to_a1(r, sched_cols[-1] + 1)}"
             data.append({'range': a1_range, 'values': [dates]})
             results[r] = (True, dates)
