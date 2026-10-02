@@ -19,6 +19,11 @@ import urllib.request
 import urllib.error
 import subprocess
 
+# 완료(N열=0) 후 마지막 업로드로부터 이 일수가 지나면 자동 리셋 후 1차부터 재예약
+AUTO_RESET_DAYS = 90
+# 자동 리셋 시 1차 예약끼리 최소 간격(분)
+AUTO_RESET_MIN_GAP_MIN = 10
+
 def get_data_dir():
     import os
     user_profile = os.environ.get('USERPROFILE', os.path.expanduser('~'))
@@ -685,7 +690,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.27"
+__version__ = "1.28"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1210,8 +1215,8 @@ del "%~f0"
 
     def setup_table(self, table, table_type="ready"):
         if table_type == "completed":
-            table.setColumnCount(7)
-            table.setHorizontalHeaderLabels(["선택", "번호", "이름", "아이디", "포트", "카페명", "게시판"])
+            table.setColumnCount(8)
+            table.setHorizontalHeaderLabels(["선택", "번호", "이름", "아이디", "포트", "카페명", "게시판", "마지막업로드"])
         else:
             table.setColumnCount(9)
             table.setHorizontalHeaderLabels(["선택", "번호", "이름", "아이디", "포트", "카페명", "게시판", "업로드", "다음예약"])
@@ -1556,6 +1561,10 @@ del "%~f0"
                 table.setItem(r, 6, item_board)
 
                 if table == self.table_completed:
+                    # 7. 마지막 업로드 일자 (시트의 '완료' 셀에 기록된 날짜 중 가장 최근)
+                    item_last = QTableWidgetItem(task.get('last_upload') or "-")
+                    item_last.setTextAlignment(Qt.AlignCenter)
+                    table.setItem(r, 7, item_last)
                     continue
 
                 # 7. 업로드 (남은 주기 표시)
@@ -1725,9 +1734,18 @@ del "%~f0"
                 time.sleep(60)
                 continue
 
+            # [추가] 완료 후 오래된 작업 자동 리셋 → 1차부터 재예약
+            try:
+                if self.auto_reset_old_completed(latest_tasks):
+                    from PySide6.QtCore import QMetaObject, Qt
+                    latest_tasks = self.sheet_mgr.get_tasks()
+                    QMetaObject.invokeMethod(self, "load_tasks", Qt.QueuedConnection)
+            except Exception as e:
+                self.update_log_signal(f"자동 리셋 확인 중 오류: {e}")
+
             now = datetime.now()
-            target_tasks = [] 
-            
+            target_tasks = []
+
             # 예약 체크
             for task in latest_tasks:
                 if not task['next_run']: continue
@@ -1819,6 +1837,59 @@ del "%~f0"
             time.sleep(60)
                 
 
+
+    def auto_reset_old_completed(self, tasks):
+        """N열(남은 업로드)이 0이고 마지막 업로드 후 AUTO_RESET_DAYS일이 지난 작업을 리셋하고 1차 일정을 기입"""
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        reset_any = False
+        assigned_times = [] # 이번에 배정한 1차 시각 (서로 겹치지 않게)
+
+        for task in tasks:
+            if not task.get('is_completed'): continue
+            if str(task.get('remain_count', '')).strip() != '0': continue
+
+            last_upload = task.get('last_upload', '')
+            if not last_upload: continue # 날짜 기록이 없으면 판단 불가 → 건너뜀
+            try:
+                last_dt = datetime.strptime(last_upload, "%Y-%m-%d %H:%M") if len(last_upload) > 10 else datetime.strptime(last_upload, "%Y-%m-%d")
+            except ValueError:
+                continue
+            if now - last_dt < timedelta(days=AUTO_RESET_DAYS): continue
+
+            self.update_log_signal(f"[{task['name']}] 마지막 업로드({last_upload}) 후 {AUTO_RESET_DAYS}일 경과 → 자동 리셋")
+            if not self.sheet_mgr.reset_task(task['row_index'], task.get('id')):
+                self.update_log_signal(f"   [{task['name']}] 자동 리셋 실패")
+                continue
+
+            # 1차 일정을 현재 이후 랜덤 시각으로 기입 (2차 이후는 update_date_manual이 주기에 맞춰 자동 계산)
+            first_dt = self._pick_random_upload_time(now, assigned_times)
+            assigned_times.append(first_dt)
+            first_date = first_dt.strftime("%Y-%m-%d %H:%M")
+            self.sheet_mgr.update_date_manual(task['row_index'], first_date, task.get('id'), stage_index=0)
+            self.update_log_signal(f"   [{task['name']}] 1차 예약 기입: {first_date}")
+            reset_any = True
+
+        return reset_any
+
+    def _pick_random_upload_time(self, now, assigned_times):
+        """현재 이후, 업로드 시간대(07:00~23:59) 안에서 이미 배정된 시각과 최소 간격 이상 떨어진 랜덤 시각 반환"""
+        import random
+        from datetime import timedelta
+        min_gap = timedelta(minutes=AUTO_RESET_MIN_GAP_MIN)
+        day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        while True:
+            win_start = max(day.replace(hour=7), now + timedelta(minutes=5))
+            win_end = day.replace(hour=23, minute=59)
+            if win_start < win_end:
+                for _ in range(50):
+                    offset = random.randint(0, int((win_end - win_start).total_seconds() // 60))
+                    cand = (win_start + timedelta(minutes=offset)).replace(second=0, microsecond=0)
+                    if all(abs(cand - t) >= min_gap for t in assigned_times):
+                        return cand
+            # 오늘 시간대가 지났거나 꽉 찼으면 다음 날로
+            day += timedelta(days=1)
 
     def start_automation(self):
         selected_real_indices = []

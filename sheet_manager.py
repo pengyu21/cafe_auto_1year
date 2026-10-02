@@ -429,6 +429,7 @@ class GoogleSheetManager:
             # Constants removed, will be instance variables
             completed_stages_count = 0
             incomplete_stages = [] # (index, date_str or empty)
+            last_upload = ""
             
             for i in range(total_stages):
                 if i >= len(sched_cols): break
@@ -445,6 +446,10 @@ class GoogleSheetManager:
                 # Constants removed, will be instance variables
                 if "완료" in cleaned_val or "완료" in cell_val_str:
                      completed_stages_count += 1
+                     # 완료 셀 첫 줄의 날짜("YYYY-MM-DD HH:MM\n2주 완료")로 마지막 업로드 일자 추적
+                     done_date = self._parse_date_robust(cell_val_str.strip().split("\n")[0])
+                     if done_date and done_date > last_upload:
+                         last_upload = done_date
                      continue
 
                 date_str = ""
@@ -488,6 +493,7 @@ class GoogleSheetManager:
                     'remain_count': str(remain_n_val) if is_completed_by_n else "0",
                     'file_path': row[self.COL_FILE_PATH],
                     'next_run': "", # 완료됨
+                    'last_upload': last_upload,
                     'is_completed': True,
                     'title': row[self.COL_TITLE],
                     'body': "",
