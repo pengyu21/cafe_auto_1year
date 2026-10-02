@@ -735,7 +735,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.33"
+__version__ = "1.34"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1123,6 +1123,12 @@ del "%~f0"
         self.chk_all_ready.stateChanged.connect(lambda state: self.toggle_select_all(self.table_ready, state))
         ready_header_layout.addWidget(self.chk_all_ready)
         ready_header_layout.addStretch()
+
+        # 일정 칸(J~M)에 기록된 에러 건수 (에러가 있을 때만 표시, 마우스를 올리면 목록)
+        self.lbl_errors = QLabel("")
+        self.lbl_errors.setStyleSheet("font-size: 10pt; color: #e74c3c; font-weight: bold;")
+        self.lbl_errors.hide()
+        ready_header_layout.addWidget(self.lbl_errors)
         left_layout.addLayout(ready_header_layout)
         
         self.table_ready = QTableWidget()
@@ -1498,6 +1504,7 @@ del "%~f0"
             self.fill_table(self.table_completed, completed_rows, self.all_prep_ids)
                 
             self.log(f"대기중: {len(ready_rows)}개, 예약됨: {len(scheduled_rows)}개, 완료됨: {len(completed_rows)}개 불러오기 완료.")
+            self.update_error_summary()
             self.btn_start.setEnabled(True)
             self.btn_load.setEnabled(True)
             
@@ -1524,6 +1531,19 @@ del "%~f0"
             import traceback
             traceback.print_exc()
             self.btn_load.setEnabled(True)
+
+    def update_error_summary(self):
+        """대기중 표 제목 옆에 단계별 에러 건수를 빨간 글씨로 표시"""
+        summary = getattr(self.sheet_mgr, 'error_summary', None) or {'counts': [], 'items': []}
+        parts = [f"{i + 1}차 에러 ({c})" for i, c in enumerate(summary['counts']) if c]
+        if not parts:
+            self.lbl_errors.hide()
+            return
+        self.lbl_errors.setText("⚠ " + "   ".join(parts))
+        tip = [f"[{stage}차] {row}행 {name} / {cafe} / {board} : {msg}" for stage, row, name, cafe, board, msg in summary['items']]
+        self.lbl_errors.setToolTip("\n".join(tip[:50]) + (f"\n... 외 {len(tip) - 50}건" if len(tip) > 50 else ""))
+        self.lbl_errors.show()
+        self.log(f"⚠ 업로드 에러가 기록된 일정: {', '.join(parts)} (대기중 표 위 빨간 글씨에 마우스를 올리면 목록 확인)")
 
     def reset_completed_tasks(self):
         """완료된 작업을 선택하여 리셋"""
@@ -1697,8 +1717,16 @@ del "%~f0"
                 item_res = QTableWidgetItem(next_run_str)
                 item_res.setTextAlignment(Qt.AlignCenter)
                 
+                # 에러가 기록된 일정은 빨간 글씨로 에러 내용 표시
+                if task.get('error'):
+                    item_res.setText(task['error'].replace("\n", " "))
+                    item_res.setToolTip(task['error'])
+                    item_res.setForeground(QColor("#e74c3c"))
+                    font = item_res.font()
+                    font.setBold(True)
+                    item_res.setFont(font)
                 # 예약 테이블인 경우 꾸미기
-                if table == self.table_scheduled and next_run_str:
+                elif table == self.table_scheduled and next_run_str:
                     item_res.setText(f"[예약됨] {next_run_str}")
                     # 형광색 대신 편안한 초록색으로 변경 (#27ae60)
                     item_res.setForeground(QColor("#27ae60")) 

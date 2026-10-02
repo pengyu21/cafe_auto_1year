@@ -316,6 +316,21 @@ class GoogleSheetManager:
         except: pass
         return ""
 
+    def _summarize_errors(self, data_rows, data_start_row):
+        """일정 칸(J~M)에 '에러'가 기록된 건수와 목록 집계 (업로드 2회 실패 시 handle_task_error가 기록)
+        반환: {'counts': [1차, 2차, 3차, 4차 건수], 'items': [(단계, 행번호, 이름, 카페명, 게시판, 에러내용)]}"""
+        sched_cols = [self.COL_SCHED_1, self.COL_SCHED_2, self.COL_SCHED_3, self.COL_SCHED_4]
+        counts = [0] * len(sched_cols)
+        items = []
+        for offset, row in enumerate(data_rows):
+            for stage, col in enumerate(sched_cols):
+                val = str(row[col]).strip() if col < len(row) else ""
+                if "에러" in val:
+                    counts[stage] += 1
+                    items.append((stage + 1, data_start_row + offset + 1, row[self.COL_NAME],
+                                  row[self.COL_CAFE_NAME], row[self.COL_BOARD_NAME], val.replace("\n", " ")))
+        return {'counts': counts, 'items': items}
+
     def _get_verified_row_index(self, row_index, task_id):
         """주어진 row_index의 ID가 task_id와 일치하는지 확인하고, 다르면 다시 검색하여 올바른 행을 반환"""
         if not task_id:
@@ -372,6 +387,8 @@ class GoogleSheetManager:
         data_start_row = start_row_idx + 1
         if data_start_row >= len(rows):
              return tasks # No data rows
+
+        self.error_summary = self._summarize_errors(rows[data_start_row:], data_start_row)
 
         # Constants removed, will be instance variables
         # Constants removed, will be instance variables
@@ -614,6 +631,7 @@ class GoogleSheetManager:
                         'remain_count': str(remain_cnt_total), 
                         'file_path': row[self.COL_FILE_PATH],
                         'next_run': date_str,
+                        'error': str(row[sched_cols[stage_idx]]).strip() if "에러" in str(row[sched_cols[stage_idx]]) else "",
                         'is_completed': False,
                         'title': row[self.COL_TITLE],
                         'body': "", 
