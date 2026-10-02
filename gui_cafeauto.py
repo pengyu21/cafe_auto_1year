@@ -667,8 +667,9 @@ class UpdateDownloadThread(QThread):
 
     def run(self):
         try:
-            temp_file = "NaverCafeAuto_update.exe"
-            
+            # exe와 같은 폴더에 받기 (바로가기 등으로 작업 폴더가 달라도 안전)
+            temp_file = os.path.join(os.path.dirname(sys.executable), "NaverCafeAuto_update.exe")
+
             req = urllib.request.Request(self.download_url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req, timeout=15) as response:
                 total_size = int(response.headers.get('content-length', 0))
@@ -684,13 +685,18 @@ class UpdateDownloadThread(QThread):
                         if total_size > 0:
                             percent = int((downloaded / total_size) * 100)
                             self.progress.emit(percent)
-                            
+
+            # 받다가 끊긴 파일로 교체되지 않도록 크기 확인
+            if total_size > 0 and downloaded != total_size:
+                os.remove(temp_file)
+                raise IOError(f"다운로드가 완료되지 않았습니다. ({downloaded}/{total_size} bytes)")
+
             self.finished.emit(temp_file)
         except Exception as e:
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.28"
+__version__ = "1.29"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -711,17 +717,28 @@ class MainApp(QMainWindow):
         self.statusBar().showMessage(f"버전: {__version__} - 대기 중")
         self.statusBar().setStyleSheet("color: #606266; font-weight: bold;")
         
-        # 프로그램 시작 시 자동으로 시트 불러오기 (0.1초 후 실행)
-        QTimer.singleShot(100, self.load_tasks)
         self.first_load_completed = False
-        
-        # 업데이트 체크 (비동기)
-        QTimer.singleShot(500, self.check_for_updates)
-        
+        self.is_updating = False
+
+        # 프로그램 시작 시 업데이트 먼저 확인 → 최신이면 시트 불러오기 (예약 모드가 구버전으로 돌지 않도록)
+        QTimer.singleShot(100, self.check_for_updates)
+
     def check_for_updates(self):
+        # 스크립트(.py) 실행 시에는 exe 교체가 불가하므로 업데이트 생략
+        if not getattr(sys, 'frozen', False):
+            self.load_tasks()
+            return
+        self.log(f"업데이트 확인 중... (현재 버전: v{__version__})")
         self.update_checker = UpdateCheckThread()
         self.update_checker.update_available.connect(self.on_update_available)
+        self.update_checker.error_occurred.connect(lambda msg: self.log(f"업데이트 확인 실패: {msg} (현재 버전으로 실행)"))
+        self.update_checker.finished.connect(self.on_update_check_finished)
         self.update_checker.start()
+
+    def on_update_check_finished(self):
+        # 업데이트를 받는 중이 아니면 평소처럼 시작
+        if not self.is_updating:
+            self.load_tasks()
 
     def on_update_available(self, latest_version, download_url):
         current_version = __version__
@@ -732,21 +749,21 @@ class MainApp(QMainWindow):
                 return (0,0,0)
                 
         if parse_version(latest_version) > parse_version(current_version):
-            reply = QMessageBox.question(self, '업데이트 알림', 
-                f"새로운 버전(v{latest_version})이 출시되었습니다. (현재 버전: v{current_version})\n\n지금 업데이트하시겠습니까?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-                
-            if reply == QMessageBox.Yes:
-                self.start_download(download_url)
-                
-    def start_download(self, download_url):
+            # 묻지 않고 자동 업데이트
+            self.is_updating = True
+            self.log(f"새 버전 v{latest_version} 발견 → 자동 업데이트를 시작합니다.")
+            self.start_download(download_url, latest_version)
+        else:
+            self.log(f"최신 버전입니다. (v{current_version})")
+
+    def start_download(self, download_url, latest_version=""):
         self.progress_dialog = QDialog(self)
         self.progress_dialog.setWindowTitle("업데이트 다운로드 중")
         self.progress_dialog.setFixedSize(400, 100)
         self.progress_dialog.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        
+
         layout = QVBoxLayout(self.progress_dialog)
-        layout.addWidget(QLabel("최신 버전을 다운로드하고 있습니다. 잠시만 기다려주세요..."))
+        layout.addWidget(QLabel(f"최신 버전(v{latest_version})을 다운로드하고 있습니다.\n완료되면 자동으로 다시 실행됩니다..."))
         
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
@@ -764,30 +781,39 @@ class MainApp(QMainWindow):
     def on_download_error(self, err_msg):
         if hasattr(self, 'progress_dialog'):
             self.progress_dialog.accept()
-        QMessageBox.warning(self, "업데이트 오류", f"다운로드 중 오류가 발생했습니다.\n\n{err_msg}")
+        # 업데이트 실패 시 현재 버전으로 계속 진행
+        self.log(f"업데이트 다운로드 실패: {err_msg} (현재 버전으로 실행)")
+        self.is_updating = False
+        self.load_tasks()
 
     def on_download_finished(self, temp_file_path):
         if hasattr(self, 'progress_dialog'):
             self.progress_dialog.accept()
-            
-        bat_path = "update_script.bat"
-        exe_name = sys.executable
-        
-        if not exe_name.lower().endswith(".exe") or "python" in exe_name.lower():
-            QMessageBox.information(self, "업데이트 준비 완료", "스크립트 모드이므로 파일을 교체하지 않고 종료합니다.")
-            return
 
+        exe_name = sys.executable
+        bat_path = os.path.join(os.path.dirname(exe_name), "update_script.bat")
+
+        # 기존 exe가 완전히 종료될 때까지 교체 재시도 (최대 약 30초) 후 새 버전 실행
+        # (콘솔 없는 실행에서는 timeout 명령이 즉시 실패하므로 ping으로 대기)
         bat_content = f"""@echo off
-timeout /t 2 /nobreak >nul
+set /a n=0
+:retry
+ping -n 3 127.0.0.1 >nul
 copy /y "{temp_file_path}" "{exe_name}" >nul
+if not errorlevel 1 goto ok
+set /a n+=1
+if %n% lss 15 goto retry
+goto launch
+:ok
 del "{temp_file_path}"
-explorer.exe "{exe_name}"
+:launch
+start "" "{exe_name}"
 del "%~f0"
 """
         with open(bat_path, "w", encoding="euc-kr") as f:
             f.write(bat_content)
-            
-        subprocess.Popen([bat_path], shell=True)
+
+        subprocess.Popen(['cmd', '/c', bat_path], cwd=os.path.dirname(exe_name), creationflags=subprocess.CREATE_NO_WINDOW)
         QApplication.quit()
         
     def apply_stylesheet(self):
