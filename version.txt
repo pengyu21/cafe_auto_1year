@@ -1,9 +1,9 @@
-현재 버전: v1.32
+현재 버전: v1.33
 업데이트 날짜: 2026-10-02
 다운로드: https://github.com/pengyu21/cafe_auto_1year/releases/latest
 
 변경 내용:
-- 자동 리셋 일정 배정 시 하루 예약을 최대 5건으로 제한 (달력과 같이 1~4차 모든 예약 포함)
-- 1차 날짜를 고를 때 2~4차가 들어갈 날짜까지 5건 이하인지 확인해 같은 날로 몰리지 않게 함
+- 자동 업데이트 후 재실행 시 "Failed to load Python DLL" 오류가 나던 문제 수정
+- ※ v1.32 이하에서 업데이트할 때는 이 오류가 한 번 더 뜰 수 있음 → '확인' 후 프로그램을 직접 다시 실행
 
 전체 변경 내역: https://github.com/pengyu21/cafe_auto_1year/blob/main/CHANGELOG.md

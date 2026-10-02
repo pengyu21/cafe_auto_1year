@@ -735,7 +735,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.32"
+__version__ = "1.33"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -852,7 +852,11 @@ del "%~f0"
         with open(bat_path, "w", encoding="euc-kr") as f:
             f.write(bat_content)
 
-        subprocess.Popen(['cmd', '/c', bat_path], cwd=os.path.dirname(exe_name), creationflags=subprocess.CREATE_NO_WINDOW)
+        # PyInstaller onefile 환경변수를 넘기면 새 exe가 종료된 현재 프로세스의 임시폴더(_MEIxxxx)를 쓰려다
+        # "Failed to load Python DLL" 오류가 나므로, 독립된 새 프로세스로 실행되도록 정리
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith(('_PYI', '_MEIPASS'))}
+        env['PYINSTALLER_RESET_ENVIRONMENT'] = '1'
+        subprocess.Popen(['cmd', '/c', bat_path], cwd=os.path.dirname(exe_name), env=env, creationflags=subprocess.CREATE_NO_WINDOW)
         QApplication.quit()
         
     def apply_stylesheet(self):
