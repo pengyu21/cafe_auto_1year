@@ -25,6 +25,10 @@ AUTO_RESET_DAYS = 90
 AUTO_RESET_MIN_GAP_MIN = 10
 # 자동 리셋 시 1차를 배정할 날의 최대 예약 수 (이미 잡힌 다른 예약 포함, 달력 기준)
 AUTO_RESET_DAILY_MAX = 5
+# 업로드 예정 시간 이 시간(시간) 전부터 사전 로그인 상태를 미리 확인/로그인
+PRELOGIN_AHEAD_HOURS = 24
+# 같은 아이디의 사전 로그인 재확인 간격(시간)
+PRELOGIN_RECHECK_HOURS = 12
 
 def count_reservations_by_day(tasks):
     """날짜(YYYY-MM-DD)별 예약 건수 (달력과 같은 기준: 미완료 작업의 next_run)"""
@@ -648,6 +652,7 @@ class CalendarDialog(QDialog):
 
 class WorkerSignals(QObject):
     log = Signal(str)
+    alert = Signal(str, str) # title, message
     finished = Signal()
 
 class TaskLoaderThread(QThread):
@@ -735,7 +740,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.34"
+__version__ = "1.35"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1940,10 +1945,97 @@ del "%~f0"
                 from PySide6.QtCore import QMetaObject, Qt
                 QMetaObject.invokeMethod(self, "load_tasks", Qt.QueuedConnection)
 
+            # [추가] 하루 안에 업로드 예정인 아이디는 미리 사전 로그인 상태 확인/로그인
+            try:
+                self.prelogin_upcoming(latest_tasks)
+            except Exception as e:
+                self.update_log_signal(f"사전 로그인 확인 중 오류: {e}")
+
             # 주기적 대기 (60초 - 구글 API 할당량 초과 방지)
             time.sleep(60)
                 
 
+
+    def show_alert(self, title, msg):
+        """스레드에서 보낸 알림을 비모달 팝업으로 표시 (스케줄러를 막지 않도록)"""
+        box = QMessageBox(QMessageBox.Warning, title, msg, QMessageBox.Ok, self)
+        box.setModal(False)
+        box.setAttribute(Qt.WA_DeleteOnClose)
+        box.show()
+        box.raise_()
+        box.activateWindow()
+
+    def prelogin_upcoming(self, tasks):
+        """업로드 예정 PRELOGIN_AHEAD_HOURS시간 이내인 아이디의 브라우저를 미리 열어 로그인 상태 확인.
+        로그아웃 상태면 시트의 비밀번호로 자동 로그인(로그인 상태 유지 체크)을 시도하고,
+        실패하면(캡챠 등) 브라우저를 로그인 화면에 띄워둔 채 사용자에게 알림."""
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        if not hasattr(self, 'prelogin_checked'):
+            self.prelogin_checked = {} # uid -> 마지막 확인 시각
+
+        # 아이디별 가장 가까운 예정 작업
+        upcoming = {}
+        for task in tasks:
+            uid = task.get('id')
+            if not uid or not task.get('next_run'):
+                continue
+            try:
+                try:
+                    res_time = datetime.strptime(task['next_run'], "%Y-%m-%d %H:%M")
+                except:
+                    res_time = datetime.strptime(task['next_run'], "%Y-%m-%d")
+            except:
+                continue
+            if now < res_time <= now + timedelta(hours=PRELOGIN_AHEAD_HOURS):
+                if uid not in upcoming or res_time < upcoming[uid][0]:
+                    upcoming[uid] = (res_time, task)
+
+        for uid, (res_time, task) in sorted(upcoming.items(), key=lambda x: x[1][0]):
+            if not self.scheduler_running:
+                break
+            last = self.prelogin_checked.get(uid)
+            if last and now - last < timedelta(hours=PRELOGIN_RECHECK_HOURS):
+                continue
+            self.prelogin_checked[uid] = now
+
+            port = get_port_for_id(uid)
+            profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
+            when = res_time.strftime("%m-%d %H:%M")
+            self.update_log_signal(f">>> [사전 로그인] {uid} 업로드 예정({when}) 전 로그인 상태 확인 (Port: {port})")
+
+            bot = NaverCafeBot()
+            keep_open = False
+            try:
+                bot.start_browser(port=port, profile_dir=profile_dir)
+                if bot.login(uid, task.get('pw', '')):
+                    self.update_log_signal(f"    [사전 로그인] {uid} 로그인 유지 중 - 확인 완료")
+                elif task.get('pw') and bot.auto_login(uid, task['pw']):
+                    self.update_log_signal(f"    [사전 로그인] {uid} 로그인이 풀려 있어 자동 로그인 완료")
+                else:
+                    keep_open = True
+                    try:
+                        if "nidlogin" not in bot.driver.current_url and "login" not in bot.driver.current_url:
+                            bot.driver.get("https://nid.naver.com/nidlogin.login")
+                    except:
+                        pass
+                    self.update_log_signal(f"    [사전 로그인] {uid} 자동 로그인 실패 - 열린 브라우저에서 직접 로그인해주세요.")
+                    self.alert_signal(
+                        "사전 로그인 필요",
+                        f"[{uid}] 업로드 예정: {when} ({task.get('name', '')} / {task.get('cafe_name', '')})\n\n"
+                        f"로그인이 풀려 있고 자동 로그인에 실패했습니다 (캡챠/기기 인증 등).\n"
+                        f"열려 있는 브라우저(Port {port})에서 '로그인 상태 유지'를 체크하고 직접 로그인해주세요."
+                    )
+            except Exception as e:
+                self.update_log_signal(f"    [사전 로그인] {uid} 확인 중 오류: {e}")
+            finally:
+                # 실패 시엔 사용자가 로그인할 수 있도록 브라우저를 그대로 둠 (업로드 시 같은 포트로 이어서 사용)
+                if not keep_open:
+                    try:
+                        bot.close_browser(wait=0)
+                    except:
+                        pass
 
     def auto_reset_old_completed(self, tasks):
         """N열(남은 업로드)이 0이고 마지막 업로드 후 AUTO_RESET_DAYS일이 지난 작업을 리셋하고 1~4차 일정을 기입"""
@@ -2221,8 +2313,12 @@ del "%~f0"
         
         # 1. 로그인
         if not bot.login(task['id'], task['pw']):
-             self.handle_task_error(task, "작업 실패: 로그인 불가. 계정 정보나 보안 입력을 확인하세요.")
-             return
+             # 사전 로그인이 풀려 있으면 그 자리에서 사전 로그인(자동 로그인 + 저장)을 다시 하고 바로 업로드 진행
+             self.update_log_signal(f"[{task['name']}] 로그인이 풀려 있어 사전 로그인을 다시 시도합니다.")
+             if not (task.get('pw') and bot.auto_login(task['id'], task['pw'])):
+                 self.handle_task_error(task, "작업 실패: 로그인 불가. 계정 정보나 보안 입력을 확인하세요.")
+                 return
+             self.update_log_signal(f"[{task['name']}] 사전 로그인 완료 - 지금 바로 업로드를 진행합니다.")
 
         # 2. URL 및 접속
         cafe_url = self.sheet_mgr.get_cafe_url(task['cafe_name'])
@@ -2418,6 +2514,8 @@ if __name__ == "__main__":
     signals = WorkerSignals()
     signals.log.connect(window.log)
     window.update_log_signal = signals.log.emit
+    signals.alert.connect(window.show_alert)
+    window.alert_signal = signals.alert.emit
     
     window.show()
     sys.exit(app.exec())

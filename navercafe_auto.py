@@ -124,10 +124,10 @@ class NaverCafeBot:
         if not port_in_use:
             self.driver.maximize_window()
 
-    def close_browser(self):
+    def close_browser(self, wait=10):
         # 10초 대기 (마지막 작업 결과를 확인할 수 있도록 창 유지)
         import time
-        time.sleep(10)
+        time.sleep(wait)
         
         if self.driver:
             try:
@@ -240,6 +240,105 @@ class NaverCafeBot:
         except Exception as e:
             print(f"로그인 처리 중 에러: {e}")
             return False
+
+    def auto_login(self, user_id, user_pw):
+        """[사전 로그인 자동화] 로그인 페이지에서 아이디/비밀번호를 붙여넣고 '로그인 상태 유지'를 체크해 로그인 시도.
+        업로드 하루 전에만 호출하므로 캡챠가 떠도 사용자가 직접 처리할 시간이 있음.
+        성공하면 True, 캡챠/기기 인증/비밀번호 오류 등으로 로그인 페이지에 머무르면 False"""
+        assert self.driver is not None
+        try:
+            self.driver.get("https://nid.naver.com/nidlogin.login")
+            time.sleep(2)
+
+            id_input = self.driver.find_element(By.ID, "id")
+            pw_input = self.driver.find_element(By.ID, "pw")
+
+            # 봇 탐지 우회: send_keys 대신 클립보드 붙여넣기
+            for elem, value in ((id_input, user_id), (pw_input, user_pw)):
+                elem.click()
+                elem.send_keys(Keys.CONTROL, 'a')
+                elem.send_keys(Keys.DELETE)
+                pyperclip.copy(value)
+                ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
+                time.sleep(1)
+            pyperclip.copy("") # 비밀번호가 클립보드에 남지 않도록 비움
+
+            # 로그인 상태 유지 체크 (신규 화면: loginStay, 구 화면: keep)
+            try:
+                keeps = self.driver.find_elements(By.ID, "loginStay") or self.driver.find_elements(By.ID, "keep")
+                if not keeps:
+                    raise Exception("로그인 상태 유지 체크박스 없음")
+                keep_checkbox = keeps[0]
+                keep_id = keep_checkbox.get_attribute("id")
+                if keep_checkbox.tag_name == "div":
+                    if keep_checkbox.get_attribute("aria-checked") == "false":
+                        self.driver.execute_script("arguments[0].click();", keep_checkbox)
+                elif not keep_checkbox.is_selected():
+                    labels = self.driver.find_elements(By.XPATH, f"//label[@for='{keep_id}']")
+                    self.driver.execute_script("arguments[0].click();", labels[0] if labels else keep_checkbox)
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"로그인 상태 유지 체크박스 처리 실패 (무시됨): {e}")
+
+            # 로그인 버튼 (신규 화면: loginBtn_column / loginBtn_row 중 보이는 것, 구 화면: log.login)
+            login_btn = None
+            for btn_id in ("loginBtn_column", "loginBtn_row", "log.login"):
+                for elem in self.driver.find_elements(By.ID, btn_id):
+                    if elem.is_displayed():
+                        login_btn = elem
+                        break
+                if login_btn:
+                    break
+            if login_btn:
+                login_btn.click()
+            else:
+                pw_input.send_keys(Keys.ENTER)
+            time.sleep(4)
+
+            # 로그인 후 '자주 사용하는 기기 등록' / 로그인 정보 저장 화면이 뜨면 모두 저장(등록)
+            self._accept_save_prompts()
+
+            if "nidlogin" in self.driver.current_url:
+                print("자동 로그인 실패 (캡챠/기기 인증 등장 또는 비밀번호 오류)")
+                return False
+
+            return self.login(user_id, user_pw)
+
+        except Exception as e:
+            try:
+                pyperclip.copy("")
+            except:
+                pass
+            print(f"자동 로그인 처리 중 에러: {e}")
+            return False
+
+    def _accept_save_prompts(self, max_pages=3):
+        """로그인 직후 네이버가 띄우는 '새로운 기기 등록', '로그인 정보 저장' 화면에서 등록/저장 버튼 클릭"""
+        for _ in range(max_pages):
+            try:
+                if "nid.naver.com" not in self.driver.current_url or "nidlogin" in self.driver.current_url:
+                    return
+                clicked = False
+                # 기기 등록 화면의 '등록' 버튼 (id: new.save)
+                for elem in self.driver.find_elements(By.ID, "new.save"):
+                    if elem.is_displayed():
+                        self.driver.execute_script("arguments[0].click();", elem)
+                        clicked = True
+                        break
+                if not clicked:
+                    for elem in self.driver.find_elements(By.XPATH, "//a | //button | //input[@type='button' or @type='submit']"):
+                        text = (elem.text or elem.get_attribute("value") or "").strip()
+                        if text in ("등록", "저장", "기기 등록", "저장하기", "등록하기") and elem.is_displayed():
+                            self.driver.execute_script("arguments[0].click();", elem)
+                            clicked = True
+                            break
+                if not clicked:
+                    return
+                print(f"로그인 저장/기기 등록 화면에서 '저장(등록)'을 눌렀습니다. ({self.driver.current_url})")
+                time.sleep(3)
+            except Exception as e:
+                print(f"저장/등록 화면 처리 실패 (무시됨): {e}")
+                return
 
     def navigate_to_cafe(self, cafe_url):
         """카페 접속"""
