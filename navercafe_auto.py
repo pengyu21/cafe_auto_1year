@@ -21,6 +21,7 @@ class NaverCafeBot:
     def __init__(self):
         self.driver = None
         self.port = None
+        self.last_login_error = "" # auto_login 실패 사유: "captcha" / "login_page" / "error"
 
     def start_browser(self, port=None, profile_dir=None):
         """브라우저 실행"""
@@ -246,6 +247,7 @@ class NaverCafeBot:
         업로드 하루 전에만 호출하므로 캡챠가 떠도 사용자가 직접 처리할 시간이 있음.
         성공하면 True, 캡챠/기기 인증/비밀번호 오류 등으로 로그인 페이지에 머무르면 False"""
         assert self.driver is not None
+        self.last_login_error = ""
         try:
             self.driver.get("https://nid.naver.com/nidlogin.login")
             time.sleep(2)
@@ -295,22 +297,97 @@ class NaverCafeBot:
                 pw_input.send_keys(Keys.ENTER)
             time.sleep(4)
 
+            if "nidlogin" in self.driver.current_url:
+                if self._has_captcha():
+                    self.last_login_error = "captcha"
+                    print("캡챠(자동입력 방지)가 떠서 자동 로그인 불가 - 캡챠로 수동로그인 필요")
+                else:
+                    self.last_login_error = "login_page"
+                    print("자동 로그인 실패 (비밀번호 오류 또는 추가 인증 필요)")
+                return False
+
+            # 크롬의 '비밀번호를 저장하시겠습니까?' 팝업 → 저장
+            self._click_chrome_save_password()
+
             # 로그인 후 '자주 사용하는 기기 등록' / 로그인 정보 저장 화면이 뜨면 모두 저장(등록)
             self._accept_save_prompts()
 
-            if "nidlogin" in self.driver.current_url:
-                print("자동 로그인 실패 (캡챠/기기 인증 등장 또는 비밀번호 오류)")
-                return False
-
-            return self.login(user_id, user_pw)
+            if self.login(user_id, user_pw):
+                return True
+            self.last_login_error = "captcha" if self._has_captcha() else "login_page"
+            return False
 
         except Exception as e:
             try:
                 pyperclip.copy("")
             except:
                 pass
+            self.last_login_error = "captcha" if self._has_captcha() else "error"
             print(f"자동 로그인 처리 중 에러: {e}")
             return False
+
+    def _has_captcha(self):
+        """로그인 화면에 캡챠(자동입력 방지)가 보이는지"""
+        try:
+            for elem in self.driver.find_elements(By.CSS_SELECTOR, "[id*='captcha' i], [class*='captcha' i]"):
+                if elem.get_attribute("type") != "hidden" and elem.is_displayed():
+                    return True
+            body = self.driver.find_element(By.TAG_NAME, "body").text
+            return "자동입력 방지" in body or "자동입력방지" in body
+        except:
+            return False
+
+    def _browser_pid(self):
+        """디버깅 포트를 열고 있는 크롬 메인 프로세스 PID (팝업 창을 이 브라우저 것으로 한정하기 위함)"""
+        if not self.port:
+            return None
+        try:
+            out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True).stdout
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[1].endswith(f":{self.port}") and parts[3] == "LISTENING":
+                    return int(parts[4])
+        except:
+            pass
+        return None
+
+    def _click_chrome_save_password(self, timeout=8):
+        """크롬의 '비밀번호를 저장하시겠습니까?' 말풍선에서 '저장' 클릭.
+        브라우저 UI라서 Selenium으로는 누를 수 없어 윈도우 UI 자동화(uiautomation)로 처리. 실패해도 로그인에는 영향 없음."""
+        try:
+            import uiautomation as auto
+        except Exception as e:
+            print(f"비밀번호 저장 팝업 처리 불가 (uiautomation 없음): {e}")
+            return False
+
+        pid = self._browser_pid()
+        prompt_words = ("비밀번호를 저장", "Save password")
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                for win in auto.GetRootControl().GetChildren():
+                    if win.ClassName != "Chrome_WidgetWin_1":
+                        continue
+                    if pid and win.ProcessId != pid:
+                        continue
+                    prompt = win.Control(searchDepth=15, Compare=lambda c, d: any(w in (c.Name or "") for w in prompt_words))
+                    if not prompt.Exists(0, 0):
+                        continue
+                    btn = win.ButtonControl(searchDepth=15, Compare=lambda c, d: c.Name in ("저장", "Save"))
+                    if btn.Exists(0, 0):
+                        try:
+                            btn.GetInvokePattern().Invoke()
+                        except:
+                            btn.Click(simulateMove=False)
+                        print("크롬 '비밀번호 저장' 팝업에서 '저장'을 눌렀습니다.")
+                        time.sleep(1)
+                        return True
+            except Exception as e:
+                print(f"비밀번호 저장 팝업 처리 중 오류 (무시됨): {e}")
+                return False
+            time.sleep(1)
+        print("크롬 '비밀번호 저장' 팝업이 뜨지 않아 넘어갑니다. (이미 저장된 경우 등)")
+        return False
 
     def _accept_save_prompts(self, max_pages=3):
         """로그인 직후 네이버가 띄우는 '새로운 기기 등록', '로그인 정보 저장' 화면에서 등록/저장 버튼 클릭"""

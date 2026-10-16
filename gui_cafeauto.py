@@ -29,6 +29,8 @@ AUTO_RESET_DAILY_MAX = 5
 PRELOGIN_AHEAD_HOURS = 24
 # 같은 아이디의 사전 로그인 재확인 간격(시간)
 PRELOGIN_RECHECK_HOURS = 12
+# 업로드까지 이 시간(분) 이내로 남은 아이디는 사전 로그인을 건너뜀 (업로드 때 로그인 처리)
+PRELOGIN_SKIP_MIN = 30
 
 def count_reservations_by_day(tasks):
     """날짜(YYYY-MM-DD)별 예약 건수 (달력과 같은 기준: 미완료 작업의 next_run)"""
@@ -740,7 +742,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.35"
+__version__ = "1.36"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1975,25 +1977,36 @@ del "%~f0"
         if not hasattr(self, 'prelogin_checked'):
             self.prelogin_checked = {} # uid -> 마지막 확인 시각
 
-        # 아이디별 가장 가까운 예정 작업
-        upcoming = {}
-        for task in tasks:
-            uid = task.get('id')
-            if not uid or not task.get('next_run'):
-                continue
+        def parse_time(task):
             try:
-                try:
-                    res_time = datetime.strptime(task['next_run'], "%Y-%m-%d %H:%M")
-                except:
-                    res_time = datetime.strptime(task['next_run'], "%Y-%m-%d")
+                return datetime.strptime(task['next_run'], "%Y-%m-%d %H:%M")
             except:
+                try:
+                    return datetime.strptime(task['next_run'], "%Y-%m-%d")
+                except:
+                    return None
+
+        # 아이디별 가장 가까운 예정 작업 (업로드 PRELOGIN_SKIP_MIN분 이내인 아이디는 업로드 때 로그인하므로 제외)
+        upcoming = {}
+        run_times = []
+        for task in tasks:
+            if not task.get('next_run'):
                 continue
-            if now < res_time <= now + timedelta(hours=PRELOGIN_AHEAD_HOURS):
+            res_time = parse_time(task)
+            if not res_time:
+                continue
+            run_times.append(res_time)
+            uid = task.get('id')
+            if uid and now + timedelta(minutes=PRELOGIN_SKIP_MIN) < res_time <= now + timedelta(hours=PRELOGIN_AHEAD_HOURS):
                 if uid not in upcoming or res_time < upcoming[uid][0]:
                     upcoming[uid] = (res_time, task)
 
         for uid, (res_time, task) in sorted(upcoming.items(), key=lambda x: x[1][0]):
             if not self.scheduler_running:
+                break
+            # 업로드 시간이 된 작업이 생기면 사전 로그인은 멈추고 업로드 먼저 (다음 루프에서 이어서 진행)
+            if any(t <= datetime.now() for t in run_times):
+                self.update_log_signal("    [사전 로그인] 업로드할 작업이 있어 사전 로그인을 잠시 멈춥니다.")
                 break
             last = self.prelogin_checked.get(uid)
             if last and now - last < timedelta(hours=PRELOGIN_RECHECK_HOURS):
@@ -2020,11 +2033,15 @@ del "%~f0"
                             bot.driver.get("https://nid.naver.com/nidlogin.login")
                     except:
                         pass
-                    self.update_log_signal(f"    [사전 로그인] {uid} 자동 로그인 실패 - 열린 브라우저에서 직접 로그인해주세요.")
+                    if bot.last_login_error == "captcha":
+                        title, reason = "캡챠로 수동로그인 필요", "자동 로그인 중 캡챠(자동입력 방지)가 떴습니다."
+                    else:
+                        title, reason = "사전 로그인 필요", "로그인이 풀려 있고 자동 로그인에 실패했습니다 (비밀번호/추가 인증 등)."
+                    self.update_log_signal(f"    [사전 로그인] {uid} {title} - 열린 브라우저에서 직접 로그인해주세요.")
                     self.alert_signal(
-                        "사전 로그인 필요",
+                        title,
                         f"[{uid}] 업로드 예정: {when} ({task.get('name', '')} / {task.get('cafe_name', '')})\n\n"
-                        f"로그인이 풀려 있고 자동 로그인에 실패했습니다 (캡챠/기기 인증 등).\n"
+                        f"{reason}\n"
                         f"열려 있는 브라우저(Port {port})에서 '로그인 상태 유지'를 체크하고 직접 로그인해주세요."
                     )
             except Exception as e:
@@ -2280,7 +2297,8 @@ del "%~f0"
         from PySide6.QtCore import QMetaObject, Qt, Q_ARG
         QMetaObject.invokeMethod(self, "load_tasks", Qt.QueuedConnection)
         
-    def handle_task_error(self, task, msg):
+    def handle_task_error(self, task, msg, immediate=False):
+        """immediate=True면 재시도 없이 바로 일정 칸에 에러 기록 (캡챠처럼 재시도해도 안 풀리는 경우)"""
         self.update_log_signal(msg)
         
         # 실패 횟수 추적 로직 추가
@@ -2290,13 +2308,13 @@ del "%~f0"
         task_id_key = f"{task.get('id', '')}_{task.get('row_index', '')}"
         current_retries = self.task_retry_counts.get(task_id_key, 0)
         
-        if current_retries >= 2:
+        if immediate or current_retries >= 2:
             self.update_log_signal(f"[{task['name']}] 2회 이상 실패하여 해당 일정 칸에 에러 사유를 기록합니다.")
             
             # J:M 일정 칸에 에러 사유 쓰기
             error_label = f"에러: {msg}"
-            if len(error_label) > 15:
-                error_label = error_label[:15] + ".."
+            if len(error_label) > 20:
+                error_label = error_label[:20] + ".."
                 
             task['next_run'] = error_label
             self.sheet_mgr.update_date_manual(task['row_index'], error_label, task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
@@ -2316,7 +2334,17 @@ del "%~f0"
              # 사전 로그인이 풀려 있으면 그 자리에서 사전 로그인(자동 로그인 + 저장)을 다시 하고 바로 업로드 진행
              self.update_log_signal(f"[{task['name']}] 로그인이 풀려 있어 사전 로그인을 다시 시도합니다.")
              if not (task.get('pw') and bot.auto_login(task['id'], task['pw'])):
-                 self.handle_task_error(task, "작업 실패: 로그인 불가. 계정 정보나 보안 입력을 확인하세요.")
+                 if bot.last_login_error == "captcha":
+                     # 캡챠는 재시도해도 풀리지 않으므로 바로 시트에 기록하고 알림
+                     self.alert_signal(
+                         "캡챠로 수동로그인 필요",
+                         f"[{task['id']}] {task['name']} / {task['cafe_name']}\n\n"
+                         f"자동 로그인 중 캡챠(자동입력 방지)가 떠서 업로드하지 못했습니다.\n"
+                         f"'사전 로그인 → 브라우저 열기'로 직접 로그인('로그인 상태 유지' 체크)한 뒤 다시 실행해주세요."
+                     )
+                     self.handle_task_error(task, "캡챠로 수동로그인 필요", immediate=True)
+                 else:
+                     self.handle_task_error(task, "작업 실패: 로그인 불가. 계정 정보나 보안 입력을 확인하세요.")
                  return
              self.update_log_signal(f"[{task['name']}] 사전 로그인 완료 - 지금 바로 업로드를 진행합니다.")
 

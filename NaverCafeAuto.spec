@@ -1,11 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+# 크롬 '비밀번호 저장' 팝업 클릭용 (윈도우 UI 자동화)
+uia_datas, uia_binaries, uia_hiddenimports = collect_all('uiautomation')
 
 
 a = Analysis(
     ['gui_cafeauto.py'],
     pathex=[],
-    binaries=[],
-    datas=[],
+    binaries=uia_binaries,
+    datas=uia_datas,
     hiddenimports=[
         'selenium',
         'selenium.webdriver',
@@ -18,7 +22,7 @@ a = Analysis(
         'selenium.webdriver.chrome.service',
         'selenium.webdriver.chrome.options',
         'webdriver_manager'
-    ],
+    ] + uia_hiddenimports + collect_submodules('comtypes'),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
