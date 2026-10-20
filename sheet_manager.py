@@ -945,6 +945,21 @@ class GoogleSheetManager:
             
         return 14
 
+    def is_stage_completed(self, row_index, task_id, stage_index):
+        """해당 단계 일정 칸(J~M)이 시트에서 현재 '완료'인지 확인 (읽기 실패 시 False)"""
+        try:
+            sched_cols = [self.COL_SCHED_1, self.COL_SCHED_2, self.COL_SCHED_3, self.COL_SCHED_4]
+            if stage_index is None or not (0 <= stage_index < len(sched_cols)):
+                return False
+            target_row = self._get_verified_row_index(row_index, task_id)
+            if not target_row:
+                return False
+            val = self.task_sheet.cell(target_row, sched_cols[stage_index] + 1).value
+            return "완료" in str(val or "")
+        except Exception as e:
+            print(f"완료 여부 확인 실패 (Row {row_index}): {e}")
+            return False
+
     def update_date_manual(self, row_index, date_str, task_id=None, stage_index=None, task_data=None):
         """사용자가 수동으로 예약 날짜를 지정했을 때 호출됨. 향후 단계 연쇄 자동 계산 포함"""
         try:

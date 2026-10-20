@@ -742,7 +742,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.36"
+__version__ = "1.37"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1236,6 +1236,8 @@ del "%~f0"
         layout.addWidget(link_label)
         
         self.scheduler_running = False
+        # 예약 실행/수동 실행/사전 로그인이 동시에 같은 작업·같은 브라우저(포트)를 쓰지 않도록 한 번에 하나만 실행
+        self.task_run_lock = threading.Lock()
 
     def log(self, msg):
         # 로그 필터링: Traceback 등 불필요한 시스템 에러 메시지 숨기기
@@ -1881,21 +1883,53 @@ del "%~f0"
                     pass
 
             if target_tasks:
-                self.update_log_signal(f"예약된 작업 {len(target_tasks)}개를 발견했습니다. 시트 최신 데이터 기반으로 처리합니다.")
+                with self.task_run_lock:
+                    self.update_log_signal(f"예약된 작업 {len(target_tasks)}개를 발견했습니다. 시트 최신 데이터 기반으로 처리합니다.")
                 
-                # ID별 포트 할당을 위해 전체 ID 목록 생성
-                all_ids = sorted(list(set([t['id'] for t in latest_tasks if t['id']])))
+                    # ID별 포트 할당을 위해 전체 ID 목록 생성
+                    all_ids = sorted(list(set([t['id'] for t in latest_tasks if t['id']])))
                 
-                for task in target_tasks:
-                    if not self.scheduler_running: break
+                    for task in target_tasks:
+                        if not self.scheduler_running: break
                     
-                    uid = task['id']
-                    
-                    try:
                         uid = task['id']
+                    
+                        try:
+                            uid = task['id']
                         
-                        # 브라우저 전환 필요 여부 확인
-                        if current_bot is None or current_user_id != uid:
+                            # 브라우저 전환 필요 여부 확인
+                            if current_bot is None or current_user_id != uid:
+                                if current_bot:
+                                    try:
+                                        current_bot.close_browser()
+                                    except:
+                                        pass
+                                    current_bot = None
+                                    current_user_id = None
+                            
+                                # 새 브라우저 설정
+                                port = get_port_for_id(uid)
+                                
+                                # 공유 폴더 충돌 방지를 위해 로컬 사용자 폴더 내에 크롬 프로필 생성
+                                profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
+                            
+                                self.update_log_signal(f"브라우저 실행 (ID: {uid}, Port: {port})")
+                                current_bot = NaverCafeBot()
+                                current_bot.start_browser(port=port, profile_dir=profile_dir)
+                                current_user_id = uid
+                        
+                            # 랜덤 지연 제거 (즉시 실행)
+                            self.update_log_signal(f"[{task['name']}] 작업을 시작합니다.")
+                        
+                            if not self.scheduler_running: break
+
+                            # 태스크 실행 (객체 전달)
+                            self.process_single_task(current_bot, task)
+
+                        except Exception as e:
+                            error_msg = f"작업 중 오류 발생: {e}"
+                            self.handle_task_error(task, error_msg)
+                            # 에러 발생 시 현재 브라우저 세션 초기화 (좀비 세션 방지)
                             if current_bot:
                                 try:
                                     current_bot.close_browser()
@@ -1903,53 +1937,23 @@ del "%~f0"
                                     pass
                                 current_bot = None
                                 current_user_id = None
-                            
-                            # 새 브라우저 설정
-                            port = get_port_for_id(uid)
-                                
-                            # 공유 폴더 충돌 방지를 위해 로컬 사용자 폴더 내에 크롬 프로필 생성
-                            profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
-                            
-                            self.update_log_signal(f"브라우저 실행 (ID: {uid}, Port: {port})")
-                            current_bot = NaverCafeBot()
-                            current_bot.start_browser(port=port, profile_dir=profile_dir)
-                            current_user_id = uid
-                        
-                        # 랜덤 지연 제거 (즉시 실행)
-                        self.update_log_signal(f"[{task['name']}] 작업을 시작합니다.")
-                        
-                        if not self.scheduler_running: break
 
-                        # 태스크 실행 (객체 전달)
-                        self.process_single_task(current_bot, task)
-
-                    except Exception as e:
-                        error_msg = f"작업 중 오류 발생: {e}"
-                        self.handle_task_error(task, error_msg)
-                        # 에러 발생 시 현재 브라우저 세션 초기화 (좀비 세션 방지)
-                        if current_bot:
-                            try:
-                                current_bot.close_browser()
-                            except:
-                                pass
-                            current_bot = None
-                            current_user_id = None
-
-                if current_bot:
-                    try:
-                        current_bot.close_browser()
-                    except:
-                        pass
-                    current_bot = None
-                    current_user_id = None
+                    if current_bot:
+                        try:
+                            current_bot.close_browser()
+                        except:
+                            pass
+                        current_bot = None
+                        current_user_id = None
                 
-                # 작업 완료 후 UI 갱신 요청
-                from PySide6.QtCore import QMetaObject, Qt
-                QMetaObject.invokeMethod(self, "load_tasks", Qt.QueuedConnection)
+                    # 작업 완료 후 UI 갱신 요청
+                    from PySide6.QtCore import QMetaObject, Qt
+                    QMetaObject.invokeMethod(self, "load_tasks", Qt.QueuedConnection)
 
             # [추가] 하루 안에 업로드 예정인 아이디는 미리 사전 로그인 상태 확인/로그인
             try:
-                self.prelogin_upcoming(latest_tasks)
+                with self.task_run_lock:
+                    self.prelogin_upcoming(latest_tasks)
             except Exception as e:
                 self.update_log_signal(f"사전 로그인 확인 중 오류: {e}")
 
@@ -2244,6 +2248,15 @@ del "%~f0"
 
     def run_process(self, indices):
         """수동 실행용"""
+        if not self.task_run_lock.acquire(blocking=False):
+            self.update_log_signal("다른 작업(예약 업로드/사전 로그인)이 진행 중입니다. 끝나면 이어서 실행합니다...")
+            self.task_run_lock.acquire()
+        try:
+            self._run_process_locked(indices)
+        finally:
+            self.task_run_lock.release()
+
+    def _run_process_locked(self, indices):
         # ID별 포트 할당을 위해 전체 ID 목록 생성
         all_ids = sorted(list(set([t['id'] for t in self.tasks if t['id']])))
         
@@ -2307,7 +2320,14 @@ del "%~f0"
             
         task_id_key = f"{task.get('id', '')}_{task.get('row_index', '')}"
         current_retries = self.task_retry_counts.get(task_id_key, 0)
-        
+
+        # 그 사이 다른 실행(다른 PC/수동 실행)이 이 단계를 이미 업로드했다면 '완료' 칸을 에러로 덮어쓰지 않음
+        stage_idx = task.get('current_stage_idx')
+        if stage_idx is not None and self.sheet_mgr.is_stage_completed(task['row_index'], task.get('id'), stage_idx):
+            self.update_log_signal(f"[{task['name']}] 이 단계는 이미 업로드 완료로 기록되어 있어 에러를 기록하지 않습니다.")
+            self.task_retry_counts[task_id_key] = 0
+            return
+
         if immediate or current_retries >= 2:
             self.update_log_signal(f"[{task['name']}] 2회 이상 실패하여 해당 일정 칸에 에러 사유를 기록합니다.")
             
@@ -2328,7 +2348,13 @@ del "%~f0"
         """단일 작업 수행 로직"""
         # task는 딕셔너리
         self.update_log_signal(f"=== 작업 시작: {task['cafe_name']} - {task['board_name']} ===")
-        
+
+        # 화면/예약 목록을 불러온 뒤 다른 실행이 이미 이 단계를 올렸다면 중복 업로드(및 기존 글 삭제)하지 않음
+        stage_idx = task.get('current_stage_idx')
+        if stage_idx is not None and self.sheet_mgr.is_stage_completed(task['row_index'], task.get('id'), stage_idx):
+            self.update_log_signal(f"[{task['name']}] 이 단계는 이미 업로드 완료로 기록되어 있어 건너뜁니다.")
+            return
+
         # 1. 로그인
         if not bot.login(task['id'], task['pw']):
              # 사전 로그인이 풀려 있으면 그 자리에서 사전 로그인(자동 로그인 + 저장)을 다시 하고 바로 업로드 진행
@@ -2482,7 +2508,9 @@ del "%~f0"
         
         if result_url:
              self.update_log_signal(f"성공: {result_url}")
-             
+             if hasattr(self, 'task_retry_counts'):
+                 self.task_retry_counts.pop(f"{task.get('id', '')}_{task.get('row_index', '')}", None)
+
              # 카운트 감소 및 상태 업데이트 (먼저 수행해야 로그에 반영됨)
              # 카운트 감소 및 상태 업데이트 (먼저 수행해야 로그에 반영됨)
              # [수정] stage_index 전달
