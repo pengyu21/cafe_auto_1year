@@ -960,6 +960,40 @@ class GoogleSheetManager:
             print(f"완료 여부 확인 실패 (Row {row_index}): {e}")
             return False
 
+    def _sched_cell_a1(self, row_index, task_id, stage_index):
+        """해당 단계 일정 칸(J~M)의 A1 주소 (못 찾으면 None)"""
+        sched_cols = [self.COL_SCHED_1, self.COL_SCHED_2, self.COL_SCHED_3, self.COL_SCHED_4]
+        if stage_index is None or not (0 <= stage_index < len(sched_cols)):
+            return None
+        target_row = self._get_verified_row_index(row_index, task_id)
+        if not target_row:
+            return None
+        return gspread.utils.rowcol_to_a1(target_row, sched_cols[stage_index] + 1)
+
+    def mark_captcha(self, row_index, task_id, stage_index, note):
+        """사전 로그인 중 캡챠가 떴을 때 예약 일정은 그대로 두고, 일정 칸을 빨간 굵은 글씨 + 메모로 표시"""
+        try:
+            a1 = self._sched_cell_a1(row_index, task_id, stage_index)
+            if not a1: return
+            self.task_sheet.insert_note(a1, note)
+            self.task_sheet.format(a1, {"textFormat": {"bold": True, "foregroundColor": {"red": 0.9, "green": 0.1, "blue": 0.1}}})
+        except Exception as e:
+            print(f"캡챠 표시 실패 (Row {row_index}): {e}")
+
+    def clear_captcha_mark(self, row_index, task_id, stage_index):
+        """로그인이 확인되면 mark_captcha로 남긴 메모/빨간 글씨를 지움 (캡챠 메모가 있을 때만, 지웠으면 True)"""
+        try:
+            a1 = self._sched_cell_a1(row_index, task_id, stage_index)
+            if not a1: return False
+            if "캡챠" not in (self.task_sheet.get_note(a1) or ""):
+                return False
+            self.task_sheet.clear_note(a1)
+            self.task_sheet.format(a1, {"textFormat": {"bold": False, "foregroundColor": {"red": 0, "green": 0, "blue": 0}}})
+            return True
+        except Exception as e:
+            print(f"캡챠 표시 해제 실패 (Row {row_index}): {e}")
+            return False
+
     def update_date_manual(self, row_index, date_str, task_id=None, stage_index=None, task_data=None):
         """사용자가 수동으로 예약 날짜를 지정했을 때 호출됨. 향후 단계 연쇄 자동 계산 포함"""
         try:
@@ -981,7 +1015,7 @@ class GoogleSheetManager:
                     
                     if date_str:
                         # Constants removed, will be instance variables
-                        if "뿉윭" in date_str or "실패" in date_str:
+                        if "뿉윭" in date_str or "실패" in date_str or "에러" in date_str:
                             return
                             
                         # Constants removed, will be instance variables

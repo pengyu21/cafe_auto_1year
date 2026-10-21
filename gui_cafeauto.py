@@ -31,6 +31,8 @@ PRELOGIN_AHEAD_HOURS = 24
 PRELOGIN_RECHECK_HOURS = 12
 # 업로드까지 이 시간(분) 이내로 남은 아이디는 사전 로그인을 건너뜀 (업로드 때 로그인 처리)
 PRELOGIN_SKIP_MIN = 30
+# 업로드 중 캡챠로 로그인하지 못했을 때 일정 칸에 기록하는 문구 ('캡챠'가 들어가면 대시보드에서 따로 표시)
+CAPTCHA_ERROR_MSG = "[캡챠] 자동입력 방지 때문에 로그인 불가 - 브라우저에서 수동로그인 필요"
 
 def count_reservations_by_day(tasks):
     """날짜(YYYY-MM-DD)별 예약 건수 (달력과 같은 기준: 미완료 작업의 next_run)"""
@@ -742,7 +744,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.37"
+__version__ = "1.38"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1236,6 +1238,8 @@ del "%~f0"
         layout.addWidget(link_label)
         
         self.scheduler_running = False
+        # 사전 로그인 중 캡챠가 뜬 아이디 -> (확인 시각, 표시한 행, 단계) (로그인이 확인되면 지움)
+        self.captcha_ids = {}
         # 예약 실행/수동 실행/사전 로그인이 동시에 같은 작업·같은 브라우저(포트)를 쓰지 않도록 한 번에 하나만 실행
         self.task_run_lock = threading.Lock()
 
@@ -1545,11 +1549,17 @@ del "%~f0"
         """대기중 표 제목 옆에 단계별 에러 건수를 빨간 글씨로 표시"""
         summary = getattr(self.sheet_mgr, 'error_summary', None) or {'counts': [], 'items': []}
         parts = [f"{i + 1}차 에러 ({c})" for i, c in enumerate(summary['counts']) if c]
+        # 캡챠(업로드 실패로 기록된 것 + 사전 로그인에서 뜬 아이디)는 따로 맨 앞에 표시
+        captcha_items = [it for it in summary['items'] if "캡챠" in it[5]]
+        captcha_count = len(captcha_items) + len(self.captcha_ids)
+        if captcha_count:
+            parts.insert(0, f"🔒 캡챠-수동로그인 필요 ({captcha_count})")
         if not parts:
             self.lbl_errors.hide()
             return
         self.lbl_errors.setText("⚠ " + "   ".join(parts))
-        tip = [f"[{stage}차] {row}행 {name} / {cafe} / {board} : {msg}" for stage, row, name, cafe, board, msg in summary['items']]
+        tip = [f"[캡챠] {uid} : 사전 로그인({flag[0]}) 중 캡챠 - 수동로그인 필요" for uid, flag in self.captcha_ids.items()]
+        tip += [f"[{stage}차] {row}행 {name} / {cafe} / {board} : {msg}" for stage, row, name, cafe, board, msg in summary['items']]
         self.lbl_errors.setToolTip("\n".join(tip[:50]) + (f"\n... 외 {len(tip) - 50}건" if len(tip) > 50 else ""))
         self.lbl_errors.show()
         self.log(f"⚠ 업로드 에러가 기록된 일정: {', '.join(parts)} (대기중 표 위 빨간 글씨에 마우스를 올리면 목록 확인)")
@@ -1726,8 +1736,25 @@ del "%~f0"
                 item_res = QTableWidgetItem(next_run_str)
                 item_res.setTextAlignment(Qt.AlignCenter)
                 
+                captcha_flag = self.captcha_ids.get(uid)
+                # 캡챠로 업로드하지 못한 일정 / 사전 로그인에서 캡챠가 뜬 아이디는 빨간 배경으로 눈에 띄게 표시
+                if "캡챠" in task.get('error', '') or (captcha_flag and not task.get('error')):
+                    if task.get('error'):
+                        text = task['error'].replace("\n", " ")
+                    else:
+                        text = f"🔒 캡챠-수동로그인 필요 (예약 {next_run_str})"
+                        item_res.setToolTip(f"사전 로그인({captcha_flag[0]}) 중 캡챠(자동입력 방지)가 떠서 자동 로그인 불가.\n"
+                                            f"'사전 로그인 → 브라우저 열기'로 직접 로그인('로그인 상태 유지' 체크)해주세요.")
+                    item_res.setText(text)
+                    if task.get('error'):
+                        item_res.setToolTip(task['error'])
+                    item_res.setForeground(QColor("#ffffff"))
+                    item_res.setBackground(QColor("#e74c3c"))
+                    font = item_res.font()
+                    font.setBold(True)
+                    item_res.setFont(font)
                 # 에러가 기록된 일정은 빨간 글씨로 에러 내용 표시
-                if task.get('error'):
+                elif task.get('error'):
                     item_res.setText(task['error'].replace("\n", " "))
                     item_res.setToolTip(task['error'])
                     item_res.setForeground(QColor("#e74c3c"))
@@ -2028,8 +2055,10 @@ del "%~f0"
                 bot.start_browser(port=port, profile_dir=profile_dir)
                 if bot.login(uid, task.get('pw', '')):
                     self.update_log_signal(f"    [사전 로그인] {uid} 로그인 유지 중 - 확인 완료")
+                    self.clear_captcha_flag(task)
                 elif task.get('pw') and bot.auto_login(uid, task['pw']):
                     self.update_log_signal(f"    [사전 로그인] {uid} 로그인이 풀려 있어 자동 로그인 완료")
+                    self.clear_captcha_flag(task)
                 else:
                     keep_open = True
                     try:
@@ -2039,6 +2068,7 @@ del "%~f0"
                         pass
                     if bot.last_login_error == "captcha":
                         title, reason = "캡챠로 수동로그인 필요", "자동 로그인 중 캡챠(자동입력 방지)가 떴습니다."
+                        self.set_captcha_flag(task, when)
                     else:
                         title, reason = "사전 로그인 필요", "로그인이 풀려 있고 자동 로그인에 실패했습니다 (비밀번호/추가 인증 등)."
                     self.update_log_signal(f"    [사전 로그인] {uid} {title} - 열린 브라우저에서 직접 로그인해주세요.")
@@ -2057,6 +2087,31 @@ del "%~f0"
                         bot.close_browser(wait=0)
                     except:
                         pass
+
+    def set_captcha_flag(self, task, when):
+        """사전 로그인 캡챠: 예약 일정은 그대로 두고 대시보드(빨간 표시)와 시트(일정 칸 메모 + 빨간 글씨)에 표시"""
+        from datetime import datetime
+        from PySide6.QtCore import QMetaObject, Qt
+        uid = task.get('id')
+        checked = datetime.now().strftime('%m-%d %H:%M')
+        self.captcha_ids[uid] = (checked, task['row_index'], task.get('current_stage_idx'))
+        self.sheet_mgr.mark_captcha(
+            task['row_index'], uid, task.get('current_stage_idx'),
+            f"⚠ [캡챠] 수동로그인 필요\n사전 로그인({checked}) 중 자동입력 방지가 떠서 자동 로그인 불가.\n"
+            f"업로드 예정({when}) 전에 '사전 로그인 → 브라우저 열기'로 직접 로그인해주세요."
+        )
+        QMetaObject.invokeMethod(self, "load_tasks", Qt.QueuedConnection)
+
+    def clear_captcha_flag(self, task):
+        """로그인이 확인되면 사전 로그인 캡챠 표시를 해제"""
+        # 표시한 칸(같은 아이디의 다른 행일 수 있음)을 지우고, 기록이 없으면(프로그램 재시작 등) 이 작업 칸의 캡챠 메모를 확인해 지움
+        flag = self.captcha_ids.pop(task.get('id'), None)
+        row_index, stage_idx = (flag[1], flag[2]) if flag else (task['row_index'], task.get('current_stage_idx'))
+        if not self.sheet_mgr.clear_captcha_mark(row_index, task.get('id'), stage_idx) and not flag:
+            return
+        self.update_log_signal(f"    [{task.get('id')}] 로그인이 확인되어 캡챠 표시를 해제했습니다.")
+        from PySide6.QtCore import QMetaObject, Qt
+        QMetaObject.invokeMethod(self, "load_tasks", Qt.QueuedConnection)
 
     def auto_reset_old_completed(self, tasks):
         """N열(남은 업로드)이 0이고 마지막 업로드 후 AUTO_RESET_DAYS일이 지난 작업을 리셋하고 1~4차 일정을 기입"""
@@ -2331,11 +2386,14 @@ del "%~f0"
         if immediate or current_retries >= 2:
             self.update_log_signal(f"[{task['name']}] 2회 이상 실패하여 해당 일정 칸에 에러 사유를 기록합니다.")
             
-            # J:M 일정 칸에 에러 사유 쓰기
-            error_label = f"에러: {msg}"
-            if len(error_label) > 20:
-                error_label = error_label[:20] + ".."
-                
+            # J:M 일정 칸에 에러 사유를 잘리지 않게 쓰기 (셀레니움 예외의 Stacktrace만 떼어내고, 발생 시각 포함)
+            from datetime import datetime
+            reason = msg.split("Stacktrace")[0]
+            reason = " ".join(reason.replace("작업 실패:", "").split())
+            if len(reason) > 200:
+                reason = reason[:200] + "..."
+            error_label = f"에러({datetime.now().strftime('%m-%d %H:%M')}): {reason}"
+
             task['next_run'] = error_label
             self.sheet_mgr.update_date_manual(task['row_index'], error_label, task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
             self.task_retry_counts[task_id_key] = 0 # 리셋
@@ -2368,11 +2426,12 @@ del "%~f0"
                          f"자동 로그인 중 캡챠(자동입력 방지)가 떠서 업로드하지 못했습니다.\n"
                          f"'사전 로그인 → 브라우저 열기'로 직접 로그인('로그인 상태 유지' 체크)한 뒤 다시 실행해주세요."
                      )
-                     self.handle_task_error(task, "캡챠로 수동로그인 필요", immediate=True)
+                     self.handle_task_error(task, CAPTCHA_ERROR_MSG, immediate=True)
                  else:
                      self.handle_task_error(task, "작업 실패: 로그인 불가. 계정 정보나 보안 입력을 확인하세요.")
                  return
              self.update_log_signal(f"[{task['name']}] 사전 로그인 완료 - 지금 바로 업로드를 진행합니다.")
+        self.clear_captcha_flag(task)
 
         # 2. URL 및 접속
         cafe_url = self.sheet_mgr.get_cafe_url(task['cafe_name'])
