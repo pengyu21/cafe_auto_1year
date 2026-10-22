@@ -980,6 +980,16 @@ class GoogleSheetManager:
         except Exception as e:
             print(f"캡챠 표시 실패 (Row {row_index}): {e}")
 
+    def update_captcha_summary(self, text):
+        """1행 O1 칸에 캡챠 실패 목록 기록 (내용이 바뀐 경우만 쓰기, 메일 알림 스크립트가 이 칸을 읽음)"""
+        if getattr(self, '_last_captcha_summary', None) == text:
+            return
+        try:
+            self.task_sheet.update_acell("O1", text)
+            self._last_captcha_summary = text
+        except Exception as e:
+            print(f"캡챠 요약(O1) 기록 실패: {e}")
+
     def clear_captcha_mark(self, row_index, task_id, stage_index):
         """로그인이 확인되면 mark_captcha로 남긴 메모/빨간 글씨를 지움 (캡챠 메모가 있을 때만, 지웠으면 True)"""
         try:

@@ -31,6 +31,12 @@ PRELOGIN_AHEAD_HOURS = 24
 PRELOGIN_RECHECK_HOURS = 12
 # 업로드까지 이 시간(분) 이내로 남은 아이디는 사전 로그인을 건너뜀 (업로드 때 로그인 처리)
 PRELOGIN_SKIP_MIN = 30
+# 사전 로그인 중 캡챠가 뜬 아이디는 이 시간(분) 뒤에 다시 자동 로그인 시도 (캡챠는 간헐적이라 다시 하면 통과되는 경우가 많음)
+PRELOGIN_CAPTCHA_RETRY_MIN = 30
+# 캡챠가 뜨면 이 시간(초) 기다렸다가 그 자리에서 한 번 더 자동 로그인 시도
+CAPTCHA_IMMEDIATE_RETRY_SEC = 30
+# 여러 아이디를 연달아 자동 로그인하면 캡챠가 잘 뜨므로 자동 로그인 사이 최소 간격(초)
+AUTO_LOGIN_GAP_SEC = 30
 # 업로드 중 캡챠로 로그인하지 못했을 때 일정 칸에 기록하는 문구 ('캡챠'가 들어가면 대시보드에서 따로 표시)
 CAPTCHA_ERROR_MSG = "[캡챠] 자동입력 방지 때문에 로그인 불가 - 브라우저에서 수동로그인 필요"
 
@@ -744,7 +750,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.38"
+__version__ = "1.39"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1552,6 +1558,7 @@ del "%~f0"
         # 캡챠(업로드 실패로 기록된 것 + 사전 로그인에서 뜬 아이디)는 따로 맨 앞에 표시
         captcha_items = [it for it in summary['items'] if "캡챠" in it[5]]
         captcha_count = len(captcha_items) + len(self.captcha_ids)
+        self._write_captcha_summary(captcha_items)
         if captcha_count:
             parts.insert(0, f"🔒 캡챠-수동로그인 필요 ({captcha_count})")
         if not parts:
@@ -1563,6 +1570,19 @@ del "%~f0"
         self.lbl_errors.setToolTip("\n".join(tip[:50]) + (f"\n... 외 {len(tip) - 50}건" if len(tip) > 50 else ""))
         self.lbl_errors.show()
         self.log(f"⚠ 업로드 에러가 기록된 일정: {', '.join(parts)} (대기중 표 위 빨간 글씨에 마우스를 올리면 목록 확인)")
+
+    def _write_captcha_summary(self, captcha_items):
+        """시트 O1에 'No.150 김가연(대현) 캡챠실패 (...)' 형식으로 캡챠 목록 기록 (메일 알림용, 백그라운드로 쓰기)"""
+        tasks = getattr(self, 'tasks', [])
+        by_row = {t['row_index']: t for t in tasks}
+        lines = []
+        for uid, flag in self.captcha_ids.items():
+            t = by_row.get(flag[1]) or next((t for t in tasks if t.get('id') == uid), {})
+            lines.append(f"No.{t.get('no', '?')} {t.get('name', uid)} 캡챠실패 (사전 로그인 {flag[0]})")
+        for stage, row, name, cafe, board, msg in captcha_items:
+            lines.append(f"No.{by_row.get(row, {}).get('no', '?')} {name} 캡챠실패 ({stage}차 업로드)")
+        text = f"캡챠 실패 ({len(lines)})\n" + "\n".join(lines) if lines else "캡챠 실패 (0)"
+        threading.Thread(target=self.sheet_mgr.update_captcha_summary, args=(text,), daemon=True).start()
 
     def reset_completed_tasks(self):
         """완료된 작업을 선택하여 리셋"""
@@ -2056,7 +2076,7 @@ del "%~f0"
                 if bot.login(uid, task.get('pw', '')):
                     self.update_log_signal(f"    [사전 로그인] {uid} 로그인 유지 중 - 확인 완료")
                     self.clear_captcha_flag(task)
-                elif task.get('pw') and bot.auto_login(uid, task['pw']):
+                elif task.get('pw') and self._auto_login_with_retry(bot, uid, task['pw']):
                     self.update_log_signal(f"    [사전 로그인] {uid} 로그인이 풀려 있어 자동 로그인 완료")
                     self.clear_captcha_flag(task)
                 else:
@@ -2069,6 +2089,9 @@ del "%~f0"
                     if bot.last_login_error == "captcha":
                         title, reason = "캡챠로 수동로그인 필요", "자동 로그인 중 캡챠(자동입력 방지)가 떴습니다."
                         self.set_captcha_flag(task, when)
+                        # 12시간을 기다리지 않고 PRELOGIN_CAPTCHA_RETRY_MIN분 뒤 다시 자동 로그인 시도
+                        self.prelogin_checked[uid] = now - timedelta(hours=PRELOGIN_RECHECK_HOURS) + timedelta(minutes=PRELOGIN_CAPTCHA_RETRY_MIN)
+                        reason += f"\n{PRELOGIN_CAPTCHA_RETRY_MIN}분 뒤 자동으로 다시 시도합니다."
                     else:
                         title, reason = "사전 로그인 필요", "로그인이 풀려 있고 자동 로그인에 실패했습니다 (비밀번호/추가 인증 등)."
                     self.update_log_signal(f"    [사전 로그인] {uid} {title} - 열린 브라우저에서 직접 로그인해주세요.")
@@ -2087,6 +2110,23 @@ del "%~f0"
                         bot.close_browser(wait=0)
                     except:
                         pass
+
+    def _auto_login_with_retry(self, bot, uid, pw):
+        """자동 로그인 (직전 자동 로그인과 AUTO_LOGIN_GAP_SEC초 간격을 두고, 캡챠가 뜨면 잠시 뒤 한 번 더 시도)"""
+        import time
+        wait = AUTO_LOGIN_GAP_SEC - (time.time() - getattr(self, 'last_auto_login_at', 0))
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            if bot.auto_login(uid, pw):
+                return True
+            if bot.last_login_error != "captcha":
+                return False
+            self.update_log_signal(f"    [사전 로그인] {uid} 캡챠가 떠서 {CAPTCHA_IMMEDIATE_RETRY_SEC}초 뒤 한 번 더 시도합니다.")
+            time.sleep(CAPTCHA_IMMEDIATE_RETRY_SEC)
+            return bot.auto_login(uid, pw)
+        finally:
+            self.last_auto_login_at = time.time()
 
     def set_captcha_flag(self, task, when):
         """사전 로그인 캡챠: 예약 일정은 그대로 두고 대시보드(빨간 표시)와 시트(일정 칸 메모 + 빨간 글씨)에 표시"""
@@ -2260,9 +2300,9 @@ del "%~f0"
         set_port_for_id(uid, port)
         
         # 백그라운드 스레드에서 브라우저 열기 (GUI 멈춤 방지)
-        threading.Thread(target=self._run_prep_browser, args=(port, profile_dir)).start()
-        
-    def _run_prep_browser(self, port, profile_dir):
+        threading.Thread(target=self._run_prep_browser, args=(port, profile_dir, uid)).start()
+
+    def _run_prep_browser(self, port, profile_dir, uid=None):
         try:
             import subprocess
             import os
@@ -2297,9 +2337,56 @@ del "%~f0"
             
             subprocess.Popen(cmd)
             self.update_log_signal(">>> [순수 크롬] 브라우저 실행 완료. 로그인 완료 후 창을 닫아주세요.")
-            
+            if uid:
+                self._watch_manual_login(uid, port, profile_dir)
+
         except Exception as e:
             self.update_log_signal(f"수동 브라우저 실행 중 에러: {e}")
+
+    def _watch_manual_login(self, uid, port, profile_dir, timeout_min=15):
+        """수동 로그인 브라우저를 지켜보다가 로그인(NID_SES 쿠키)이 확인되면 캡챠 표시를 해제"""
+        import socket
+        import time
+
+        def port_open():
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                return sock.connect_ex(('127.0.0.1', int(port))) == 0
+
+        # 크롬이 디버깅 포트를 열 때까지 대기
+        for _ in range(30):
+            if port_open():
+                break
+            time.sleep(0.5)
+        else:
+            return
+
+        bot = NaverCafeBot()
+        try:
+            bot.start_browser(port=port, profile_dir=profile_dir)
+            deadline = time.time() + timeout_min * 60
+            while time.time() < deadline and port_open():
+                try:
+                    cookies = bot.driver.execute_cdp_cmd("Network.getAllCookies", {}).get('cookies', [])
+                except Exception:
+                    break # 사용자가 창을 닫음
+                if any(c.get('name') == 'NID_SES' for c in cookies):
+                    self.update_log_signal(f"    [사전 로그인] {uid} 수동 로그인 확인 완료")
+                    # 다음 예약 루프에서 바로 다시 확인하도록 재확인 기록도 지움
+                    getattr(self, 'prelogin_checked', {}).pop(uid, None)
+                    task = next((t for t in getattr(self, 'tasks', []) if t.get('id') == uid), None)
+                    if task or uid in self.captcha_ids:
+                        self.clear_captcha_flag(task or {'id': uid, 'row_index': self.captcha_ids[uid][1],
+                                                         'current_stage_idx': self.captcha_ids[uid][2]})
+                    return
+                time.sleep(3)
+        except Exception as e:
+            self.update_log_signal(f"    [사전 로그인] {uid} 로그인 확인 중 오류: {e}")
+        finally:
+            # 사용자가 쓰는 브라우저는 닫지 않고 붙어 있던 크롬드라이버만 종료
+            try:
+                bot.driver.service.stop()
+            except Exception:
+                pass
 
     def run_process(self, indices):
         """수동 실행용"""
@@ -2417,9 +2504,9 @@ del "%~f0"
         if not bot.login(task['id'], task['pw']):
              # 사전 로그인이 풀려 있으면 그 자리에서 사전 로그인(자동 로그인 + 저장)을 다시 하고 바로 업로드 진행
              self.update_log_signal(f"[{task['name']}] 로그인이 풀려 있어 사전 로그인을 다시 시도합니다.")
-             if not (task.get('pw') and bot.auto_login(task['id'], task['pw'])):
+             if not (task.get('pw') and self._auto_login_with_retry(bot, task['id'], task['pw'])):
                  if bot.last_login_error == "captcha":
-                     # 캡챠는 재시도해도 풀리지 않으므로 바로 시트에 기록하고 알림
+                     # 잠시 뒤 다시 시도해도 캡챠면 바로 시트에 기록하고 알림
                      self.alert_signal(
                          "캡챠로 수동로그인 필요",
                          f"[{task['id']}] {task['name']} / {task['cafe_name']}\n\n"
