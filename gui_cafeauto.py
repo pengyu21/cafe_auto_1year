@@ -750,7 +750,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.40"
+__version__ = "1.41"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1144,6 +1144,14 @@ del "%~f0"
         self.lbl_errors.setStyleSheet("font-size: 10pt; color: #e74c3c; font-weight: bold;")
         self.lbl_errors.hide()
         ready_header_layout.addWidget(self.lbl_errors)
+
+        # 캡챠 경고가 있을 때만 표시: 해당 아이디의 사전 로그인 브라우저를 바로 열어줌
+        self.btn_captcha_login = QPushButton("🔑 로그인하러 가기")
+        self.btn_captcha_login.setCursor(Qt.PointingHandCursor)
+        self.btn_captcha_login.setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold; border-radius: 4px; padding: 3px 10px;")
+        self.btn_captcha_login.clicked.connect(self.on_captcha_login_clicked)
+        self.btn_captcha_login.hide()
+        ready_header_layout.addWidget(self.btn_captcha_login)
         left_layout.addLayout(ready_header_layout)
         
         self.table_ready = QTableWidget()
@@ -1565,6 +1573,7 @@ del "%~f0"
         self._write_captcha_summary(captcha_items)
         if captcha_count:
             parts.insert(0, f"🔒 캡챠-수동로그인 필요 ({captcha_count})")
+        self.btn_captcha_login.setVisible(bool(self._captcha_login_ids()))
         if not parts:
             self.lbl_errors.hide()
             return
@@ -1574,6 +1583,43 @@ del "%~f0"
         self.lbl_errors.setToolTip("\n".join(tip[:50]) + (f"\n... 외 {len(tip) - 50}건" if len(tip) > 50 else ""))
         self.lbl_errors.show()
         self.log(f"⚠ 업로드 에러가 기록된 일정: {', '.join(parts)} (대기중 표 위 빨간 글씨에 마우스를 올리면 목록 확인)")
+
+    def _captcha_login_ids(self):
+        """수동 로그인이 필요한 (캡챠) 아이디 목록 [(uid, 이름)] - 사전 로그인 캡챠 + 업로드 캡챠 에러"""
+        names = {}
+        for t in getattr(self, 'tasks', []) or []:
+            if t.get('id') and t['id'] not in names:
+                names[t['id']] = t.get('name', '')
+        uids = list(self.captcha_ids.keys())
+        for t in getattr(self, 'tasks', []) or []:
+            if t.get('id') and "캡챠" in t.get('error', '') and t['id'] not in uids:
+                uids.append(t['id'])
+        return [(uid, names.get(uid, '')) for uid in uids]
+
+    def on_captcha_login_clicked(self):
+        """캡챠 아이디의 사전 로그인 브라우저 열기 (여러 개면 메뉴에서 선택)"""
+        targets = self._captcha_login_ids()
+        if not targets:
+            self.btn_captcha_login.hide()
+            return
+        if len(targets) == 1:
+            self.open_login_for(targets[0][0])
+            return
+        menu = QMenu(self)
+        for uid, name in targets:
+            action = menu.addAction(f"{name} ({uid})" if name else uid)
+            action.triggered.connect(lambda checked=False, u=uid: self.open_login_for(u))
+        menu.exec(self.btn_captcha_login.mapToGlobal(self.btn_captcha_login.rect().bottomLeft()))
+
+    def open_login_for(self, uid):
+        """사전 로그인 콤보에서 해당 아이디를 선택하고 브라우저 열기"""
+        idx = self.combo_prep_id.findData(uid)
+        if idx < 0:
+            QMessageBox.warning(self, "알림", f"사전 로그인 목록에서 아이디를 찾을 수 없습니다: {uid}")
+            return
+        self.combo_prep_id.setCurrentIndex(idx)
+        self.on_prep_id_changed(idx)
+        self.open_prep_browser()
 
     def _write_captcha_summary(self, captcha_items):
         """시트 O1에 'No.150 김가연(대현) 캡챠실패 (...)' 형식으로 캡챠 목록 기록 (메일 알림용, 백그라운드로 쓰기)"""
