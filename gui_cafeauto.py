@@ -750,7 +750,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.39"
+__version__ = "1.40"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1324,6 +1324,10 @@ del "%~f0"
         table.setContextMenuPolicy(Qt.CustomContextMenu)
         table.customContextMenuRequested.connect(lambda pos, t=table: self.on_table_context_menu(pos, t))
         
+        # 기본 정렬: 예약 = 캡챠 오류 → 다음 예약 가까운 순 / 완료 = 리셋까지 D-day 적은 순
+        if table_type in ("scheduled", "completed"):
+            table.horizontalHeader().setSortIndicator(8, Qt.AscendingOrder)
+
         # [추가] 정렬 기능 활성화
         table.setSortingEnabled(True)
         
@@ -1632,6 +1636,7 @@ del "%~f0"
         return False
 
     def fill_table(self, table, rows_with_index, all_ids=None):
+        from datetime import datetime
         table.setSortingEnabled(False)
         table.clearContents()
         table.setRowCount(0)
@@ -1753,12 +1758,22 @@ del "%~f0"
 
                 # 8. 다음 예약
                 next_run_str = task['next_run']
-                item_res = QTableWidgetItem(next_run_str)
-                item_res.setTextAlignment(Qt.AlignCenter)
-                
                 captcha_flag = self.captcha_ids.get(uid)
+                is_captcha = "캡챠" in task.get('error', '') or bool(captcha_flag and not task.get('error'))
+
+                # 정렬 키: 캡챠 오류 먼저 → 다음 예약(업로드) 시각이 가까운 순
+                run_ts = float('inf')
+                for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                    try:
+                        run_ts = datetime.strptime(str(next_run_str).strip(), fmt).timestamp()
+                        break
+                    except (ValueError, TypeError):
+                        pass
+                item_res = SortableItem(next_run_str, (0 if is_captcha else 1, run_ts))
+                item_res.setTextAlignment(Qt.AlignCenter)
+
                 # 캡챠로 업로드하지 못한 일정 / 사전 로그인에서 캡챠가 뜬 아이디는 빨간 배경으로 눈에 띄게 표시
-                if "캡챠" in task.get('error', '') or (captcha_flag and not task.get('error')):
+                if is_captcha:
                     if task.get('error'):
                         text = task['error'].replace("\n", " ")
                     else:
