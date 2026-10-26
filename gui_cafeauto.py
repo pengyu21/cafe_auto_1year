@@ -751,7 +751,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.42"
+__version__ = "1.43"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -2197,6 +2197,8 @@ del "%~f0"
                     else:
                         title, reason = "사전 로그인 필요", "로그인이 풀려 있고 자동 로그인에 실패했습니다 (비밀번호/추가 인증 등)."
                     self.update_log_signal(f"    [사전 로그인] {uid} {title} - 열린 브라우저에서 직접 로그인해주세요.")
+                    # 열어둔 브라우저에서 로그인하면 바로 캡챠 표시를 해제하도록 지켜봄 (다음 재시도까지 기다리지 않게)
+                    threading.Thread(target=self._watch_manual_login, args=(uid, port, profile_dir), daemon=True).start()
                     self.alert_signal(
                         title,
                         f"[{uid}] 업로드 예정: {when} ({task.get('name', '')} / {task.get('cafe_name', '')})\n\n"
@@ -2472,7 +2474,7 @@ del "%~f0"
         except Exception as e:
             self.update_log_signal(f"    [사전 로그인] {uid} 아이디/비밀번호 자동 입력 실패 (직접 입력해주세요): {e}")
 
-    def _watch_manual_login(self, uid, port, profile_dir, timeout_min=15):
+    def _watch_manual_login(self, uid, port, profile_dir, timeout_min=60):
         """수동 로그인 브라우저를 지켜보다가 로그인(NID_SES 쿠키)이 확인되면 캡챠 표시를 해제"""
         import socket
         import time
@@ -2503,7 +2505,9 @@ del "%~f0"
                     self.update_log_signal(f"    [사전 로그인] {uid} 수동 로그인 확인 완료")
                     # 다음 예약 루프에서 바로 다시 확인하도록 재확인 기록도 지움
                     getattr(self, 'prelogin_checked', {}).pop(uid, None)
-                    task = next((t for t in getattr(self, 'tasks', []) if t.get('id') == uid), None)
+                    # 완료된 행에는 캡챠 표시가 없으므로 진행 중인 행을 먼저 찾음
+                    same_id = [t for t in getattr(self, 'tasks', []) if t.get('id') == uid]
+                    task = next((t for t in same_id if not t.get('is_completed')), same_id[0] if same_id else None)
                     if task or uid in self.captcha_ids:
                         self.clear_captcha_flag(task or {'id': uid, 'row_index': self.captcha_ids[uid][1],
                                                          'current_stage_idx': self.captcha_ids[uid][2]})
