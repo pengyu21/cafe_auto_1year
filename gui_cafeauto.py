@@ -15,6 +15,7 @@ from PySide6.QtGui import QIcon, QFont, QAction, QColor, QDesktopServices, QIntV
 from sheet_manager import GoogleSheetManager
 from navercafe_auto import NaverCafeBot
 import json
+import re
 import urllib.request
 import urllib.error
 import subprocess
@@ -750,7 +751,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.41"
+__version__ = "1.42"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1142,6 +1143,9 @@ del "%~f0"
         # 일정 칸(J~M)에 기록된 에러 건수 (에러가 있을 때만 표시, 마우스를 올리면 목록)
         self.lbl_errors = QLabel("")
         self.lbl_errors.setStyleSheet("font-size: 10pt; color: #e74c3c; font-weight: bold;")
+        # 캡챠 아이디 이름은 링크로 표시: 누르면 표에서 해당 행으로 이동
+        self.lbl_errors.setTextFormat(Qt.RichText)
+        self.lbl_errors.linkActivated.connect(self.jump_to_captcha_row)
         self.lbl_errors.hide()
         ready_header_layout.addWidget(self.lbl_errors)
 
@@ -1566,23 +1570,47 @@ del "%~f0"
     def update_error_summary(self):
         """대기중 표 제목 옆에 단계별 에러 건수를 빨간 글씨로 표시"""
         summary = getattr(self.sheet_mgr, 'error_summary', None) or {'counts': [], 'items': []}
-        parts = [f"{i + 1}차 에러 ({c})" for i, c in enumerate(summary['counts']) if c]
-        # 캡챠(업로드 실패로 기록된 것 + 사전 로그인에서 뜬 아이디)는 따로 맨 앞에 표시
+        # 캡챠 에러는 아래에서 사람별로 따로 표시하므로 단계별 에러 건수에서는 뺌 (같은 건이 두 번 세지지 않게)
         captcha_items = [it for it in summary['items'] if "캡챠" in it[5]]
-        captcha_count = len(captcha_items) + len(self.captcha_ids)
+        counts = [0] * len(summary['counts'])
+        for it in summary['items']:
+            if "캡챠" not in it[5] and 0 < it[0] <= len(counts):
+                counts[it[0] - 1] += 1
+        parts = [f"{i + 1}차 에러 ({c})" for i, c in enumerate(counts) if c]
         self._write_captcha_summary(captcha_items)
-        if captcha_count:
-            parts.insert(0, f"🔒 캡챠-수동로그인 필요 ({captcha_count})")
-        self.btn_captcha_login.setVisible(bool(self._captcha_login_ids()))
+        # 캡챠(사전 로그인 + 업로드 실패)는 아이디 기준으로 한 사람당 한 번만, 이름을 바로 보여줌
+        targets = self._captcha_login_ids()
+        if targets:
+            links = [f'<a href="{uid}" style="color:#c0392b;">{name or uid}</a>' for uid, name in targets[:3]]
+            more = f" 외 {len(targets) - 3}명" if len(targets) > 3 else ""
+            parts.insert(0, f"🔒 캡챠-수동로그인 필요 ({len(targets)}명): {', '.join(links)}{more}")
+        self.btn_captcha_login.setVisible(bool(targets))
+        # 버튼에도 누구인지 표시 (여러 명이면 첫 사람 외 N명, 누르면 목록에서 선택)
+        if targets:
+            first = targets[0][1] or targets[0][0]
+            who = first if len(targets) == 1 else f"{first} 외 {len(targets) - 1}명"
+            self.btn_captcha_login.setText(f"🔑 {who} 로그인하러 가기")
         if not parts:
             self.lbl_errors.hide()
             return
-        self.lbl_errors.setText("⚠ " + "   ".join(parts))
+        self.lbl_errors.setText("⚠ " + "&nbsp;&nbsp;&nbsp;".join(parts))
         tip = [f"[캡챠] {uid} : 사전 로그인({flag[0]}) 중 캡챠 - 수동로그인 필요" for uid, flag in self.captcha_ids.items()]
         tip += [f"[{stage}차] {row}행 {name} / {cafe} / {board} : {msg}" for stage, row, name, cafe, board, msg in summary['items']]
         self.lbl_errors.setToolTip("\n".join(tip[:50]) + (f"\n... 외 {len(tip) - 50}건" if len(tip) > 50 else ""))
         self.lbl_errors.show()
-        self.log(f"⚠ 업로드 에러가 기록된 일정: {', '.join(parts)} (대기중 표 위 빨간 글씨에 마우스를 올리면 목록 확인)")
+        log_parts = [re.sub(r"<[^>]+>", "", p) for p in parts]
+        self.log(f"⚠ 업로드 에러가 기록된 일정: {', '.join(log_parts)} (대기중 표 위 빨간 글씨에 마우스를 올리면 목록 확인)")
+
+    def jump_to_captcha_row(self, uid):
+        """캡챠 이름 링크를 누르면 대기중/예약 표에서 그 아이디의 캡챠 행을 선택하고 보이게 스크롤"""
+        for table in (self.table_ready, self.table_scheduled):
+            for r in range(table.rowCount()):
+                id_item, res_item = table.item(r, 3), table.item(r, 8)
+                if id_item and id_item.text() == uid and res_item and "캡챠" in res_item.text():
+                    table.setFocus()
+                    table.selectRow(r)
+                    table.scrollToItem(id_item, QAbstractItemView.PositionAtCenter)
+                    return
 
     def _captcha_login_ids(self):
         """수동 로그인이 필요한 (캡챠) 아이디 목록 [(uid, 이름)] - 사전 로그인 캡챠 + 업로드 캡챠 에러"""
@@ -1626,8 +1654,15 @@ del "%~f0"
         tasks = getattr(self, 'tasks', [])
         by_row = {t['row_index']: t for t in tasks}
         lines = []
+        # 업로드 캡챠 에러가 이미 기록된 아이디는 사전 로그인 캡챠로 한 번 더 쓰지 않음
+        upload_ids = {by_row.get(row, {}).get('id') for _, row, *_ in captcha_items}
         for uid, flag in self.captcha_ids.items():
-            t = by_row.get(flag[1]) or next((t for t in tasks if t.get('id') == uid), {})
+            if uid in upload_ids:
+                continue
+            # 저장해둔 행 번호는 시트 행이 바뀌면 다른 사람을 가리킬 수 있으므로 아이디가 맞을 때만 사용
+            t = by_row.get(flag[1], {})
+            if t.get('id') != uid:
+                t = next((t for t in tasks if t.get('id') == uid), {})
             lines.append(f"No.{t.get('no', '?')} {t.get('name', uid)} 캡챠실패 (사전 로그인 {flag[0]})")
         for stage, row, name, cafe, board, msg in captcha_items:
             lines.append(f"No.{by_row.get(row, {}).get('no', '?')} {name} 캡챠실패 ({stage}차 업로드)")
@@ -1821,7 +1856,9 @@ del "%~f0"
                 # 캡챠로 업로드하지 못한 일정 / 사전 로그인에서 캡챠가 뜬 아이디는 빨간 배경으로 눈에 띄게 표시
                 if is_captcha:
                     if task.get('error'):
-                        text = task['error'].replace("\n", " ")
+                        # 긴 에러 문구 대신 짧게 (전체 내용은 툴팁), 에러 시각만 남김
+                        m = re.search(r"에러\(([^)]*)\)", task['error'])
+                        text = f"🔒 캡챠-수동로그인 필요 ({m.group(1)})" if m else "🔒 캡챠-수동로그인 필요"
                     else:
                         text = f"🔒 캡챠-수동로그인 필요 (예약 {next_run_str})"
                         item_res.setToolTip(f"사전 로그인({captcha_flag[0]}) 중 캡챠(자동입력 방지)가 떠서 자동 로그인 불가.\n"
@@ -1834,6 +1871,10 @@ del "%~f0"
                     font = item_res.font()
                     font.setBold(True)
                     item_res.setFont(font)
+                    # 누구인지 바로 보이게 이름 칸도 빨간 굵은 글씨
+                    item_name.setText(f"🔒 {task['name']}")
+                    item_name.setForeground(QColor("#e74c3c"))
+                    item_name.setFont(font)
                 # 에러가 기록된 일정은 빨간 글씨로 에러 내용 표시
                 elif task.get('error'):
                     item_res.setText(task['error'].replace("\n", " "))
@@ -2404,6 +2445,33 @@ del "%~f0"
         except Exception as e:
             self.update_log_signal(f"수동 브라우저 실행 중 에러: {e}")
 
+    def _prefill_login_form(self, bot, uid):
+        """수동 로그인 브라우저의 로그인 화면에 시트의 아이디/비밀번호를 미리 입력 (로그인 버튼과 캡챠는 사용자가 직접)"""
+        import time
+        from selenium.webdriver.common.by import By
+        pw = next((t.get('pw') for t in getattr(self, 'tasks', []) or [] if t.get('id') == uid and t.get('pw')), "")
+        if not pw:
+            self.update_log_signal(f"    [사전 로그인] {uid} 시트에 비밀번호가 없어 직접 입력해야 합니다.")
+            return
+        try:
+            # 이미 열려 있던 브라우저면 로그인 화면이 새 탭으로 열리므로 그 탭을 찾음 (페이지 로딩 대기)
+            for _ in range(20):
+                login_tab = None
+                for handle in bot.driver.window_handles:
+                    bot.driver.switch_to.window(handle)
+                    if "nidlogin" in bot.driver.current_url:
+                        login_tab = handle
+                        break
+                if login_tab and bot.driver.find_elements(By.ID, "id"):
+                    break
+                time.sleep(0.5)
+            else:
+                return # 로그인 화면이 아님 (이미 로그인됨 등)
+            bot.fill_login_form(uid, pw)
+            self.update_log_signal(f"    [사전 로그인] {uid} 아이디/비밀번호를 입력해두었습니다. 캡챠가 있으면 풀고 로그인 버튼을 눌러주세요.")
+        except Exception as e:
+            self.update_log_signal(f"    [사전 로그인] {uid} 아이디/비밀번호 자동 입력 실패 (직접 입력해주세요): {e}")
+
     def _watch_manual_login(self, uid, port, profile_dir, timeout_min=15):
         """수동 로그인 브라우저를 지켜보다가 로그인(NID_SES 쿠키)이 확인되면 캡챠 표시를 해제"""
         import socket
@@ -2424,6 +2492,7 @@ del "%~f0"
         bot = NaverCafeBot()
         try:
             bot.start_browser(port=port, profile_dir=profile_dir)
+            self._prefill_login_form(bot, uid)
             deadline = time.time() + timeout_min * 60
             while time.time() < deadline and port_open():
                 try:

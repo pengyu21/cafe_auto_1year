@@ -252,35 +252,7 @@ class NaverCafeBot:
             self.driver.get("https://nid.naver.com/nidlogin.login")
             time.sleep(2)
 
-            id_input = self.driver.find_element(By.ID, "id")
-            pw_input = self.driver.find_element(By.ID, "pw")
-
-            # 봇 탐지 우회: send_keys 대신 클립보드 붙여넣기
-            for elem, value in ((id_input, user_id), (pw_input, user_pw)):
-                elem.click()
-                elem.send_keys(Keys.CONTROL, 'a')
-                elem.send_keys(Keys.DELETE)
-                pyperclip.copy(value)
-                ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
-                time.sleep(1)
-            pyperclip.copy("") # 비밀번호가 클립보드에 남지 않도록 비움
-
-            # 로그인 상태 유지 체크 (신규 화면: loginStay, 구 화면: keep)
-            try:
-                keeps = self.driver.find_elements(By.ID, "loginStay") or self.driver.find_elements(By.ID, "keep")
-                if not keeps:
-                    raise Exception("로그인 상태 유지 체크박스 없음")
-                keep_checkbox = keeps[0]
-                keep_id = keep_checkbox.get_attribute("id")
-                if keep_checkbox.tag_name == "div":
-                    if keep_checkbox.get_attribute("aria-checked") == "false":
-                        self.driver.execute_script("arguments[0].click();", keep_checkbox)
-                elif not keep_checkbox.is_selected():
-                    labels = self.driver.find_elements(By.XPATH, f"//label[@for='{keep_id}']")
-                    self.driver.execute_script("arguments[0].click();", labels[0] if labels else keep_checkbox)
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"로그인 상태 유지 체크박스 처리 실패 (무시됨): {e}")
+            pw_input = self.fill_login_form(user_id, user_pw)
 
             # 로그인 버튼 (신규 화면: loginBtn_column / loginBtn_row 중 보이는 것, 구 화면: log.login)
             login_btn = None
@@ -325,6 +297,42 @@ class NaverCafeBot:
             self.last_login_error = "captcha" if self._has_captcha() else "error"
             print(f"자동 로그인 처리 중 에러: {e}")
             return False
+
+    def fill_login_form(self, user_id, user_pw):
+        """현재 로그인 화면에 아이디/비밀번호를 붙여넣고 '로그인 상태 유지'를 체크 (로그인 버튼은 누르지 않음).
+        비밀번호 입력칸을 반환"""
+        id_input = self.driver.find_element(By.ID, "id")
+        pw_input = self.driver.find_element(By.ID, "pw")
+
+        # 봇 탐지 우회: send_keys 대신 클립보드 붙여넣기
+        try:
+            for elem, value in ((id_input, user_id), (pw_input, user_pw)):
+                elem.click()
+                elem.send_keys(Keys.CONTROL, 'a')
+                elem.send_keys(Keys.DELETE)
+                pyperclip.copy(value)
+                ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
+                time.sleep(1)
+        finally:
+            pyperclip.copy("") # 비밀번호가 클립보드에 남지 않도록 비움
+
+        # 로그인 상태 유지 체크 (신규 화면: loginStay, 구 화면: keep)
+        try:
+            keeps = self.driver.find_elements(By.ID, "loginStay") or self.driver.find_elements(By.ID, "keep")
+            if not keeps:
+                raise Exception("로그인 상태 유지 체크박스 없음")
+            keep_checkbox = keeps[0]
+            keep_id = keep_checkbox.get_attribute("id")
+            if keep_checkbox.tag_name == "div":
+                if keep_checkbox.get_attribute("aria-checked") == "false":
+                    self.driver.execute_script("arguments[0].click();", keep_checkbox)
+            elif not keep_checkbox.is_selected():
+                labels = self.driver.find_elements(By.XPATH, f"//label[@for='{keep_id}']")
+                self.driver.execute_script("arguments[0].click();", labels[0] if labels else keep_checkbox)
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"로그인 상태 유지 체크박스 처리 실패 (무시됨): {e}")
+        return pw_input
 
     def _has_captcha(self):
         """로그인 화면에 캡챠(자동입력 방지)가 보이는지"""
