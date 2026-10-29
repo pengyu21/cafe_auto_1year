@@ -663,7 +663,7 @@ class CalendarDialog(QDialog):
 
 class WorkerSignals(QObject):
     log = Signal(str)
-    alert = Signal(str, str) # title, message
+    alert = Signal(str, str, str) # key(같은 key의 팝업은 하나만 유지), title, message
     finished = Signal()
 
 class TaskLoaderThread(QThread):
@@ -751,7 +751,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.43"
+__version__ = "1.44"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1258,6 +1258,8 @@ del "%~f0"
         self.scheduler_running = False
         # 사전 로그인 중 캡챠가 뜬 아이디 -> (확인 시각, 표시한 행, 단계) (로그인이 확인되면 지움)
         self.captcha_ids = {}
+        # 수동 로그인 감시 스레드가 돌고 있는 아이디 (재시도마다 같은 브라우저에 감시 스레드가 중복으로 붙지 않게)
+        self.login_watchers = set()
         # 예약 실행/수동 실행/사전 로그인이 동시에 같은 작업·같은 브라우저(포트)를 쓰지 않도록 한 번에 하나만 실행
         self.task_run_lock = threading.Lock()
 
@@ -2111,11 +2113,23 @@ del "%~f0"
                 
 
 
-    def show_alert(self, title, msg):
-        """스레드에서 보낸 알림을 비모달 팝업으로 표시 (스케줄러를 막지 않도록)"""
+    def show_alert(self, key, title, msg):
+        """스레드에서 보낸 알림을 비모달 팝업으로 표시 (스케줄러를 막지 않도록).
+        같은 key(아이디)의 팝업이 이미 떠 있으면 새로 띄우지 않고 내용만 바꿈 (재시도마다 팝업이 쌓이지 않게)"""
+        if not hasattr(self, 'alert_boxes'):
+            self.alert_boxes = {}
+        box = self.alert_boxes.get(key)
+        if box is not None:
+            box.setWindowTitle(title)
+            box.setText(msg)
+            box.raise_()
+            box.activateWindow()
+            return
         box = QMessageBox(QMessageBox.Warning, title, msg, QMessageBox.Ok, self)
         box.setModal(False)
         box.setAttribute(Qt.WA_DeleteOnClose)
+        self.alert_boxes[key] = box
+        box.destroyed.connect(lambda *_: self.alert_boxes.pop(key, None))
         box.show()
         box.raise_()
         box.activateWindow()
@@ -2198,8 +2212,11 @@ del "%~f0"
                         title, reason = "사전 로그인 필요", "로그인이 풀려 있고 자동 로그인에 실패했습니다 (비밀번호/추가 인증 등)."
                     self.update_log_signal(f"    [사전 로그인] {uid} {title} - 열린 브라우저에서 직접 로그인해주세요.")
                     # 열어둔 브라우저에서 로그인하면 바로 캡챠 표시를 해제하도록 지켜봄 (다음 재시도까지 기다리지 않게)
-                    threading.Thread(target=self._watch_manual_login, args=(uid, port, profile_dir), daemon=True).start()
+                    if uid not in self.login_watchers:
+                        self.login_watchers.add(uid)
+                        threading.Thread(target=self._watch_manual_login, args=(uid, port, profile_dir), daemon=True).start()
                     self.alert_signal(
+                        f"login:{uid}",
                         title,
                         f"[{uid}] 업로드 예정: {when} ({task.get('name', '')} / {task.get('cafe_name', '')})\n\n"
                         f"{reason}\n"
@@ -2441,7 +2458,8 @@ del "%~f0"
             
             subprocess.Popen(cmd)
             self.update_log_signal(">>> [순수 크롬] 브라우저 실행 완료. 로그인 완료 후 창을 닫아주세요.")
-            if uid:
+            if uid and uid not in self.login_watchers:
+                self.login_watchers.add(uid)
                 self._watch_manual_login(uid, port, profile_dir)
 
         except Exception as e:
@@ -2489,6 +2507,7 @@ del "%~f0"
                 break
             time.sleep(0.5)
         else:
+            self.login_watchers.discard(uid)
             return
 
         bot = NaverCafeBot()
@@ -2516,6 +2535,7 @@ del "%~f0"
         except Exception as e:
             self.update_log_signal(f"    [사전 로그인] {uid} 로그인 확인 중 오류: {e}")
         finally:
+            self.login_watchers.discard(uid)
             # 사용자가 쓰는 브라우저는 닫지 않고 붙어 있던 크롬드라이버만 종료
             try:
                 bot.driver.service.stop()
@@ -2642,6 +2662,7 @@ del "%~f0"
                  if bot.last_login_error == "captcha":
                      # 잠시 뒤 다시 시도해도 캡챠면 바로 시트에 기록하고 알림
                      self.alert_signal(
+                         f"login:{task['id']}",
                          "캡챠로 수동로그인 필요",
                          f"[{task['id']}] {task['name']} / {task['cafe_name']}\n\n"
                          f"자동 로그인 중 캡챠(자동입력 방지)가 떠서 업로드하지 못했습니다.\n"
