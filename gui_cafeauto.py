@@ -751,7 +751,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.44"
+__version__ = "1.45"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -2191,10 +2191,10 @@ del "%~f0"
                 bot.start_browser(port=port, profile_dir=profile_dir)
                 if bot.login(uid, task.get('pw', '')):
                     self.update_log_signal(f"    [사전 로그인] {uid} 로그인 유지 중 - 확인 완료")
-                    self.clear_captcha_flag(task)
+                    self.on_login_confirmed(uid, task)
                 elif task.get('pw') and self._auto_login_with_retry(bot, uid, task['pw']):
                     self.update_log_signal(f"    [사전 로그인] {uid} 로그인이 풀려 있어 자동 로그인 완료")
-                    self.clear_captcha_flag(task)
+                    self.on_login_confirmed(uid, task)
                 else:
                     keep_open = True
                     try:
@@ -2273,6 +2273,36 @@ del "%~f0"
         self.update_log_signal(f"    [{task.get('id')}] 로그인이 확인되어 캡챠 표시를 해제했습니다.")
         from PySide6.QtCore import QMetaObject, Qt
         QMetaObject.invokeMethod(self, "load_tasks", Qt.QueuedConnection)
+
+    def restore_captcha_errors(self, uid):
+        """로그인이 확인되면 업로드 중 캡챠로 '에러'가 적힌 이 아이디의 일정 칸을 원래 예약 시각으로 되돌림
+        (원래 예약을 모르는 예전 에러는 지금 시각으로 -> 다음 예약 루프에서 바로 업로드)"""
+        from datetime import datetime
+        restored = []
+        for t in list(getattr(self, 'tasks', []) or []):
+            if t.get('id') != uid or t.get('is_completed') or "캡챠" not in t.get('error', ''):
+                continue
+            m = re.search(r"원래 예약 (\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)", t['error'])
+            new_date = m.group(1) if m else datetime.now().strftime("%Y-%m-%d %H:%M")
+            if self.sheet_mgr.restore_schedule_cell(t['row_index'], uid, t.get('current_stage_idx'), new_date):
+                t['error'] = ""
+                t['next_run'] = new_date
+                restored.append(f"{t.get('cafe_name', '')} → {new_date}")
+        if restored:
+            self.update_log_signal(f"    [{uid}] 로그인이 확인되어 캡챠 에러 일정을 되돌렸습니다: {', '.join(restored)}")
+            from PySide6.QtCore import QMetaObject, Qt
+            QMetaObject.invokeMethod(self, "load_tasks", Qt.QueuedConnection)
+
+    def on_login_confirmed(self, uid, task=None):
+        """로그인 확인 시 사전 로그인 캡챠 표시 해제 + 업로드 캡챠 에러 일정 복구"""
+        if task is None:
+            # 완료된 행에는 캡챠 표시가 없으므로 진행 중인 행을 먼저 찾음
+            same_id = [t for t in getattr(self, 'tasks', []) or [] if t.get('id') == uid]
+            task = next((t for t in same_id if not t.get('is_completed')), same_id[0] if same_id else None)
+        if task or uid in self.captcha_ids:
+            self.clear_captcha_flag(task or {'id': uid, 'row_index': self.captcha_ids[uid][1],
+                                             'current_stage_idx': self.captcha_ids[uid][2]})
+        self.restore_captcha_errors(uid)
 
     def auto_reset_old_completed(self, tasks):
         """N열(남은 업로드)이 0이고 마지막 업로드 후 AUTO_RESET_DAYS일이 지난 작업을 리셋하고 1~4차 일정을 기입"""
@@ -2524,12 +2554,7 @@ del "%~f0"
                     self.update_log_signal(f"    [사전 로그인] {uid} 수동 로그인 확인 완료")
                     # 다음 예약 루프에서 바로 다시 확인하도록 재확인 기록도 지움
                     getattr(self, 'prelogin_checked', {}).pop(uid, None)
-                    # 완료된 행에는 캡챠 표시가 없으므로 진행 중인 행을 먼저 찾음
-                    same_id = [t for t in getattr(self, 'tasks', []) if t.get('id') == uid]
-                    task = next((t for t in same_id if not t.get('is_completed')), same_id[0] if same_id else None)
-                    if task or uid in self.captcha_ids:
-                        self.clear_captcha_flag(task or {'id': uid, 'row_index': self.captcha_ids[uid][1],
-                                                         'current_stage_idx': self.captcha_ids[uid][2]})
+                    self.on_login_confirmed(uid)
                     return
                 time.sleep(3)
         except Exception as e:
@@ -2668,12 +2693,15 @@ del "%~f0"
                          f"자동 로그인 중 캡챠(자동입력 방지)가 떠서 업로드하지 못했습니다.\n"
                          f"'사전 로그인 → 브라우저 열기'로 직접 로그인('로그인 상태 유지' 체크)한 뒤 다시 실행해주세요."
                      )
-                     self.handle_task_error(task, CAPTCHA_ERROR_MSG, immediate=True)
+                     # 수동 로그인하면 이 예약 시각으로 일정 칸을 되돌릴 수 있게 원래 예약을 같이 적어둠
+                     orig = task.get('next_run', '')
+                     msg = f"{CAPTCHA_ERROR_MSG} (원래 예약 {orig})" if re.match(r"\d{4}-\d{2}-\d{2}", str(orig)) else CAPTCHA_ERROR_MSG
+                     self.handle_task_error(task, msg, immediate=True)
                  else:
                      self.handle_task_error(task, "작업 실패: 로그인 불가. 계정 정보나 보안 입력을 확인하세요.")
                  return
              self.update_log_signal(f"[{task['name']}] 사전 로그인 완료 - 지금 바로 업로드를 진행합니다.")
-        self.clear_captcha_flag(task)
+        self.on_login_confirmed(task['id'], task)
 
         # 2. URL 및 접속
         cafe_url = self.sheet_mgr.get_cafe_url(task['cafe_name'])

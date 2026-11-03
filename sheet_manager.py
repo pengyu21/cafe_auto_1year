@@ -1004,6 +1004,25 @@ class GoogleSheetManager:
             print(f"캡챠 표시 해제 실패 (Row {row_index}): {e}")
             return False
 
+    def restore_schedule_cell(self, row_index, task_id, stage_index, date_str):
+        """캡챠 에러로 덮어쓴 일정 칸을 예약 날짜로 되돌림 (그 칸만 쓰고 이후 단계 일정은 건드리지 않음, 메모/빨간 글씨도 지움)"""
+        try:
+            a1 = self._sched_cell_a1(row_index, task_id, stage_index)
+            if not a1: return False
+            current = str(self.task_sheet.acell(a1).value or "")
+            if "캡챠" not in current:
+                return False # 그 사이 다른 PC/사용자가 일정을 바꿔둠
+            self.task_sheet.update_acell(a1, date_str)
+            try:
+                self.task_sheet.clear_note(a1)
+                self.task_sheet.format(a1, {"textFormat": {"bold": False, "foregroundColor": {"red": 0, "green": 0, "blue": 0}}})
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            print(f"캡챠 일정 복구 실패 (Row {row_index}): {e}")
+            return False
+
     def update_date_manual(self, row_index, date_str, task_id=None, stage_index=None, task_data=None):
         """사용자가 수동으로 예약 날짜를 지정했을 때 호출됨. 향후 단계 연쇄 자동 계산 포함"""
         try:
