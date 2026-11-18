@@ -22,6 +22,100 @@ class NaverCafeBot:
         self.driver = None
         self.port = None
         self.last_login_error = "" # auto_login 실패 사유: "captcha" / "login_page" / "error"
+        self.last_write_error = "" # write_post 실패 시 구체적인 사유 (시트 에러 칸에 기록)
+
+    def _clip_copy(self, text, tries=10):
+        """클립보드에 텍스트 복사 (다른 프로그램이 클립보드를 잡고 있으면 잠시 뒤 재시도).
+        pyperclip은 0.5초 안에 클립보드를 못 열면 바로 예외를 내서 글쓰기 전체가 실패하던 문제 방지"""
+        last_err = None
+        copied = False
+        for _ in range(tries):
+            try:
+                pyperclip.copy(text)
+                copied = True
+                if not text or pyperclip.paste().strip() == text.strip():
+                    return
+            except Exception as e:
+                last_err = e
+            time.sleep(0.5)
+        if copied:
+            return # 복사는 됐는데 확인만 안 된 경우는 그대로 진행
+        raise Exception(f"클립보드 사용 불가 (다른 프로그램이 사용 중): {last_err}")
+
+    def _paste_text(self, text):
+        """클립보드로 텍스트 붙여넣기 (이모지 등 send_keys 미지원 문자 대응)"""
+        self._clip_copy(text)
+        ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
+
+    def _write_fail(self, reason):
+        """글쓰기 실패 사유 기록 + 화면 캡처 저장 (원인 확인용)"""
+        self.last_write_error = reason
+        print(f"-> [글쓰기 실패] {reason}")
+        try:
+            from datetime import datetime
+            shot_dir = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), 'navercafe_auto_data', 'error_screenshots')
+            os.makedirs(shot_dir, exist_ok=True)
+            # 오래된 캡처 정리 (최근 50장만 유지)
+            shots = sorted(glob.glob(os.path.join(shot_dir, '*.png')))
+            for old in shots[:-49]:
+                try: os.remove(old)
+                except: pass
+            path = os.path.join(shot_dir, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{self.port}.png")
+            self.driver.switch_to.default_content()
+            self.driver.save_screenshot(path)
+            print(f"-> 실패 화면 저장: {path}")
+        except Exception as e:
+            print(f"-> 실패 화면 저장 실패: {e}")
+        return None
+
+    def _visible_messages(self):
+        """글쓰기 화면에 떠 있는 경고/안내 문구 수집 (등록이 안 된 이유 확인용)"""
+        js = """
+        var sel = '[role=alert], [role=dialog], [class*=layer], [class*=popup], [class*=toast], [class*=modal], [class*=alert], [class*=error], [class*=warn]';
+        var out = [];
+        document.querySelectorAll(sel).forEach(function(e){
+            var r = e.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden') {
+                var t = (e.innerText || '').replace(/\\s+/g, ' ').trim();
+                if (t && t.length < 200 && out.indexOf(t) < 0) out.push(t);
+            }
+        });
+        return out.slice(0, 3).join(' / ');
+        """
+        msgs = []
+        for frame in (None, "cafe_main"):
+            try:
+                self.driver.switch_to.default_content()
+                if frame:
+                    self.driver.switch_to.frame(frame)
+                m = self.driver.execute_script(js)
+                if m:
+                    msgs.append(m)
+            except Exception:
+                pass
+        try:
+            self.driver.switch_to.default_content()
+        except Exception:
+            pass
+        return " / ".join(msgs)[:150]
+
+    def _editor_image_count(self):
+        """에디터에 올라간 이미지 개수 (최상위/ cafe_main 중 에디터가 있는 곳 기준)"""
+        js = "return document.querySelectorAll('.se-component.se-image, .se-component.se-imageStrip').length;"
+        best = 0
+        for frame in (None, "cafe_main"):
+            try:
+                self.driver.switch_to.default_content()
+                if frame:
+                    self.driver.switch_to.frame(frame)
+                best = max(best, self.driver.execute_script(js) or 0)
+            except Exception:
+                pass
+        try:
+            self.driver.switch_to.default_content()
+        except Exception:
+            pass
+        return best
 
     def start_browser(self, port=None, profile_dir=None):
         """브라우저 실행"""
@@ -159,10 +253,17 @@ class NaverCafeBot:
             f"[System.Windows.Forms.Clipboard]::SetFileDropList($files);"
         )
 
-        subprocess.run(
-            ["powershell", "-command", ps_command],
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-        )
+        # 다른 프로그램이 클립보드를 잡고 있으면 실패하므로 몇 번 재시도
+        for attempt in range(5):
+            r = subprocess.run(
+                ["powershell", "-command", ps_command],
+                capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+            if r.returncode == 0 and not r.stderr.strip():
+                break
+            print(f"-> 이미지 클립보드 복사 실패, 재시도 ({attempt+1}/5)")
+            time.sleep(1.0)
 
         time.sleep(1.0)
         
@@ -310,11 +411,13 @@ class NaverCafeBot:
                 elem.click()
                 elem.send_keys(Keys.CONTROL, 'a')
                 elem.send_keys(Keys.DELETE)
-                pyperclip.copy(value)
-                ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
+                self._paste_text(value)
                 time.sleep(1)
         finally:
-            pyperclip.copy("") # 비밀번호가 클립보드에 남지 않도록 비움
+            try:
+                self._clip_copy("") # 비밀번호가 클립보드에 남지 않도록 비움
+            except Exception:
+                pass
 
         # 로그인 상태 유지 체크 (신규 화면: loginStay, 구 화면: keep)
         try:
@@ -703,6 +806,7 @@ class NaverCafeBot:
         content_list: [{'type': 'text'|'image', 'value': '...'}, ...] 순서대로 작성
         """
         assert self.driver is not None
+        self.last_write_error = ""
         try:
             # 글쓰기 버튼 찾기 및 클릭 (Retry Logic)
             for attempt in range(3):
@@ -786,7 +890,7 @@ class NaverCafeBot:
                                 except Exception as js_err:
                                     print(f"JS 클릭도 실패했습니다: {js_err}")
                                     if attempt == 2:
-                                        return False
+                                        return self._write_fail("글쓰기 버튼 클릭 실패")
                         
                         time.sleep(5) # 페이지 이동 대기
                         break # 성공 시 루프 탈출
@@ -794,13 +898,13 @@ class NaverCafeBot:
                     else:
                         print(f"글쓰기 버튼을 찾을 수 없습니다. (시도 {attempt+1}/3)")
                         if attempt == 2:
-                            return False
+                            return self._write_fail("게시판에 글쓰기 버튼이 없음 (글쓰기 권한/등급 또는 페이지 로딩 확인)")
                         time.sleep(2)
                         
                 except Exception as e:
                     print(f"글쓰기 버튼 클릭 프로세스 중 에러 (시도 {attempt+1}/3): {e}")
                     if attempt == 2:
-                        return False
+                        return self._write_fail(f"글쓰기 버튼 처리 중 에러: {str(e).splitlines()[0][:80]}")
                     time.sleep(2)
             
             # 스마트에디터 로딩 대기
@@ -837,8 +941,7 @@ class NaverCafeBot:
                     title_area.clear() # 기존 텍스트(예: "제목을 입력해 주세요.")가 남아있을 수 있으므로 클리어
                     
                     # 이모지(BMP 외부 문자) 등 send_keys()가 미지원하는 문자열을 위해 클립보드 붙여넣기 사용
-                    pyperclip.copy(title)
-                    webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
+                    self._paste_text(title)
                     time.sleep(1)
                 except Exception as e:
                     print(f"제목 입력 (클립보드 붙여넣기) 실패: {e}")
@@ -851,10 +954,11 @@ class NaverCafeBot:
                     except: pass
                     title_input = self.driver.find_element(By.ID, "subject")
                     title_input.click()
-                    pyperclip.copy(title)
-                    webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
+                    self._paste_text(title)
                 except Exception as e:
                     print(f"구버전 제목란도 찾을 수 없습니다: {e}")
+                    msg = self._visible_messages()
+                    return self._write_fail("글쓰기 화면(제목 입력란)이 열리지 않음" + (f" - 화면 메시지: {msg}" if msg else ""))
 
             time.sleep(1)
 
@@ -983,7 +1087,7 @@ class NaverCafeBot:
                             continue
                             
                         # 내용 입력
-                        pyperclip.copy(line)
+                        self._clip_copy(line)
                         webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
                         
                         # 붙여넣기 후 엔터 (줄바꿈) -> \n
@@ -1026,6 +1130,20 @@ class NaverCafeBot:
 
                 prev_type = ctype # [추가] 현재 타입 저장
             time.sleep(0.2)
+
+            # 이미지 업로드가 끝나기 전에 등록을 누르면 글이 안 올라가므로, 붙여넣은 이미지가 에디터에 다 올라올 때까지 대기 (최대 30초)
+            expected_imgs = sum(1 for c in content_list if c['type'] == 'image' and os.path.exists(c['value']))
+            if expected_imgs:
+                cnt = 0
+                for _ in range(30):
+                    cnt = self._editor_image_count()
+                    if cnt >= expected_imgs:
+                        break
+                    time.sleep(1)
+                print(f"-> 에디터 이미지 확인: {cnt}/{expected_imgs}개")
+                if cnt < expected_imgs:
+                    print("-> [경고] 이미지가 다 올라오지 않았지만 등록을 진행합니다.")
+                time.sleep(2) # 마지막 이미지 처리 여유
             
             # 6. 등록 버튼 클릭 전 '전체공개' 설정
             # cafe_main 프레임 확보
@@ -1078,6 +1196,7 @@ class NaverCafeBot:
                 print(f"-> 전체공개 설정 실패: {e}") 
 
             # 등록 버튼 클릭
+            alert_texts = [] # 등록 후 뜬 알림 문구 (실패 사유 확인용)
             print("등록 버튼 클릭 시도...")
             try:
                 # 사용자 지정: a class='BaseButton BaseButton--skinGreen size_default'
@@ -1099,8 +1218,9 @@ class NaverCafeBot:
                     # 1. Native Alert 처리
                     WebDriverWait(self.driver, 1).until(EC.alert_is_present())
                     alert = self.driver.switch_to.alert
+                    alert_texts.append(alert.text)
                     alert.accept()
-                    print("-> 네이티브 Alert 확인 클릭")
+                    print(f"-> 네이티브 Alert 확인 클릭: {alert_texts[-1]}")
                     time.sleep(1)
                 except:
                     # 2. Custom Modal (DOM 엘리먼트) 처리
@@ -1151,7 +1271,7 @@ class NaverCafeBot:
                     except:
                         pass
                 except:
-                    return None
+                    return self._write_fail("등록 버튼을 찾지 못함")
 
             # 등록 완료 후 URL 가져오기
 
@@ -1160,13 +1280,25 @@ class NaverCafeBot:
             
             # 등록 완료 후 URL 변경 대기 (write 주소에서 빠져나오는지 확인)
             print("페이지 이동(업로드 완료) 대기 중...")
-            try:
-                WebDriverWait(self.driver, 10).until(
-                    lambda driver: "write" not in driver.current_url.lower()
-                )
-            except:
-                print("-> [경고] 10초 대기 후에도 URL이 변경되지 않았습니다. 업로드가 지연되거나 실패했을 수 있습니다.")
-                
+            # (네이버가 느린 시간대엔 10초로 부족해, 올라가는 중인데 실패로 처리되던 문제 → 최대 30초, 중간에 뜬 알림은 읽고 닫음)
+            moved = False
+            for _ in range(60):
+                try:
+                    if "write" not in self.driver.current_url.lower():
+                        moved = True
+                        break
+                except Exception:
+                    try:
+                        alert = self.driver.switch_to.alert
+                        alert_texts.append(alert.text)
+                        print(f"-> 등록 후 Alert: {alert.text}")
+                        alert.accept()
+                    except Exception:
+                        pass
+                time.sleep(0.5)
+            if not moved:
+                print("-> [경고] 30초 대기 후에도 URL이 변경되지 않았습니다. 업로드가 지연되거나 실패했을 수 있습니다.")
+
             final_url = self.driver.current_url
             
             # 7. URL 복사 버튼 클릭 시도 (Clean URL)
@@ -1238,14 +1370,15 @@ class NaverCafeBot:
             # 최종적으로 구한 URL이 여전히 글쓰기(write) 페이지라면 실패로 간주
             if "write" in final_url.lower():
                 print(f"-> [오류] 게시글 업로드 실패 (URL이 글쓰기 주소에 머물러 있음): {final_url}")
-                return None
+                detail = " / ".join(t for t in alert_texts if t) or self._visible_messages()
+                return self._write_fail("등록을 눌렀지만 글이 올라가지 않음" + (f" - 화면 메시지: {detail}" if detail else " (화면 메시지 없음)"))
 
             return final_url
 
 
         except Exception as e:
             print(f"글쓰기 중 에러 발생: {e}")
-            return None
+            return self._write_fail(f"글쓰기 중 에러: {str(e).splitlines()[0][:100]}")
 
     def find_images(self, folder_path, keyword, stage=None, stage_name=None):
         """폴더 내에서 키워드(전/후)가 포함된 이미지 파일 찾기

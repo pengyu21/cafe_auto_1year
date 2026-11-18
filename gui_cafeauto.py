@@ -38,6 +38,9 @@ PRELOGIN_CAPTCHA_RETRY_MIN = 30
 CAPTCHA_IMMEDIATE_RETRY_SEC = 30
 # 여러 아이디를 연달아 자동 로그인하면 캡챠가 잘 뜨므로 자동 로그인 사이 최소 간격(초)
 AUTO_LOGIN_GAP_SEC = 30
+# 업로드 실패 시 재시도 간격(분): 1번째 실패 후 10분, 2번째 실패 후 30분 뒤 재시도, 3번째 실패하면 일정 칸에 에러 기록
+# (예전엔 1분마다 바로 재시도해서 네이버 쪽 일시적 문제(서버 지연·연속 작업 제한 등)가 풀리기 전에 3번 다 실패하던 문제)
+UPLOAD_RETRY_DELAY_MIN = [10, 30]
 # 업로드 중 캡챠로 로그인하지 못했을 때 일정 칸에 기록하는 문구 ('캡챠'가 들어가면 대시보드에서 따로 표시)
 CAPTCHA_ERROR_MSG = "[캡챠] 자동입력 방지 때문에 로그인 불가 - 브라우저에서 수동로그인 필요"
 
@@ -751,7 +754,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.45"
+__version__ = "1.46"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -2012,6 +2015,7 @@ del "%~f0"
 
             now = datetime.now()
             target_tasks = []
+            deferred_keys = set() # 재시도 대기 중인 작업 (사전 로그인이 '업로드할 작업 있음'으로 멈추지 않게 제외)
 
             # 예약 체크
             for task in latest_tasks:
@@ -2027,6 +2031,11 @@ del "%~f0"
                     # self.update_log_signal(f"DEBUG: [{task['name']}] 예정: {res_time}, 현재: {now}, 차이: {time_diff:.1f}초")
 
                     if res_time <= now:
+                        # 실패 후 재시도 대기 중이면 정해진 시각까지 건너뜀
+                        retry_at = getattr(self, 'task_retry_after', {}).get(f"{task.get('id', '')}_{task.get('row_index', '')}")
+                        if retry_at and now < retry_at:
+                            deferred_keys.add(id(task))
+                            continue
                         target_tasks.append(task)
                         self.update_log_signal(f"-> 실행 대상 발견: {task['name']} ({task['next_run']})")
                 except Exception as e:
@@ -2104,7 +2113,7 @@ del "%~f0"
             # [추가] 하루 안에 업로드 예정인 아이디는 미리 사전 로그인 상태 확인/로그인
             try:
                 with self.task_run_lock:
-                    self.prelogin_upcoming(latest_tasks)
+                    self.prelogin_upcoming([t for t in latest_tasks if id(t) not in deferred_keys])
             except Exception as e:
                 self.update_log_signal(f"사전 로그인 확인 중 오류: {e}")
 
@@ -2663,10 +2672,18 @@ del "%~f0"
             task['next_run'] = error_label
             self.sheet_mgr.update_date_manual(task['row_index'], error_label, task.get('id'), stage_index=task.get('current_stage_idx'), task_data=task)
             self.task_retry_counts[task_id_key] = 0 # 리셋
+            getattr(self, 'task_retry_after', {}).pop(task_id_key, None)
         else:
             self.task_retry_counts[task_id_key] = current_retries + 1
+            # 바로(1분 뒤) 다시 하면 같은 이유로 또 실패하는 경우가 많아, 시간을 두고 재시도
+            from datetime import datetime, timedelta
+            delay = UPLOAD_RETRY_DELAY_MIN[min(current_retries, len(UPLOAD_RETRY_DELAY_MIN) - 1)]
+            if not hasattr(self, 'task_retry_after'):
+                self.task_retry_after = {}
+            retry_at = datetime.now() + timedelta(minutes=delay)
+            self.task_retry_after[task_id_key] = retry_at
             self.update_log_signal(f"[{task['name']}] 예약 일정은 유지됩니다. ({self.task_retry_counts[task_id_key]}/2회 재시도 실패)")
-            self.update_log_signal(f"  -> 일시적 오류일 경우 다음 실행 시 재시도됩니다.")
+            self.update_log_signal(f"  -> 일시적 오류일 수 있어 {delay}분 뒤({retry_at.strftime('%H:%M')}) 다시 시도합니다.")
 
     def process_single_task(self, bot, task):
         """단일 작업 수행 로직"""
@@ -2839,6 +2856,8 @@ del "%~f0"
              self.update_log_signal(f"성공: {result_url}")
              if hasattr(self, 'task_retry_counts'):
                  self.task_retry_counts.pop(f"{task.get('id', '')}_{task.get('row_index', '')}", None)
+             if hasattr(self, 'task_retry_after'):
+                 self.task_retry_after.pop(f"{task.get('id', '')}_{task.get('row_index', '')}", None)
 
              # 카운트 감소 및 상태 업데이트 (먼저 수행해야 로그에 반영됨)
              # 카운트 감소 및 상태 업데이트 (먼저 수행해야 로그에 반영됨)
@@ -2867,7 +2886,8 @@ del "%~f0"
              except:
                  pass
         else:
-             self.handle_task_error(task, "작업 실패: 글쓰기 오류 (요소 찾기, 시간 초과 등)")
+             reason = getattr(bot, 'last_write_error', '') or "요소 찾기, 시간 초과 등"
+             self.handle_task_error(task, f"작업 실패: 글쓰기 오류 ({reason})")
 
     def get_content_order_for_task_idx(self, task_idx):
         # 사용자 요청: 전, 후, 본문 순서 (이미지 -> 텍스트)
