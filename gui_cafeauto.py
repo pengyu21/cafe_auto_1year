@@ -754,7 +754,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.50"
+__version__ = "1.51"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1463,7 +1463,13 @@ del "%~f0"
         try:
             self.tasks = tasks
             self.log(f"총 {len(self.tasks)}개의 작업을 불러왔습니다.")
-            
+            # 시트에서 지워진 아이디의 사전 로그인 캡챠 표시는 정리 (대시보드 경고/O1 목록에 계속 남지 않게)
+            if self.tasks:
+                sheet_ids = {t.get('id') for t in self.tasks}
+                for uid in [u for u in self.captcha_ids if u not in sheet_ids]:
+                    self.captcha_ids.pop(uid, None)
+                    self.log(f"    [{uid}] 시트에서 지워진 아이디라 캡챠 표시를 해제했습니다.")
+
             ready_rows = []
             scheduled_rows = []
             completed_rows = []
