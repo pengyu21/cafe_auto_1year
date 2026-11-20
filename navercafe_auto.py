@@ -99,6 +99,34 @@ class NaverCafeBot:
             pass
         return " / ".join(msgs)[:150]
 
+    def _take_alerts(self):
+        """떠 있는 브라우저 알림창(alert/confirm)의 문구를 읽고 닫기
+        (confirm은 '취소'로 닫음 - '작성 중인 글 이어쓰기'를 수락하면 예전 임시글이 섞여 내용이 중복되므로)"""
+        texts = []
+        for _ in range(3):
+            try:
+                a = self.driver.switch_to.alert
+                t = (a.text or "").strip()
+                a.dismiss()
+                print(f"-> 브라우저 알림창 확인: {t}")
+                if t:
+                    texts.append(t[:100])
+                time.sleep(0.5)
+            except Exception:
+                break
+        return texts
+
+    @staticmethod
+    def _alert_text_from(err):
+        """셀레니움이 알림창 때문에 낸 예외에서 알림 문구 추출 (알림창이 자동으로 닫혀 문구를 잃는 경우 대비)"""
+        t = getattr(err, "alert_text", None)
+        if not t:
+            m = re.search(r"Alert Text: (.+?)(?: ?Message:|$)", str(err), re.M)
+            t = m.group(1) if m and m.group(1) != "None" else None
+        if t:
+            print(f"-> 알림창 감지: {t}")
+        return [t.strip()[:100]] if t and t.strip() else []
+
     def _editor_image_count(self):
         """에디터에 올라간 이미지 개수 (최상위/ cafe_main 중 에디터가 있는 곳 기준)"""
         js = "return document.querySelectorAll('.se-component.se-image, .se-component.se-imageStrip').length;"
@@ -907,33 +935,45 @@ class NaverCafeBot:
                         return self._write_fail(f"글쓰기 버튼 처리 중 에러: {str(e).splitlines()[0][:80]}")
                     time.sleep(2)
             
-            # 스마트에디터 로딩 대기
-            time.sleep(5) 
-            
-            # [중요] 단일 창 모드에서는 에디터가 iframe이 아닌 최상위에 로드될 가능성이 높음
-            self.driver.switch_to.default_content()
-            
+            # 스마트에디터 로딩 대기 (최대 약 25초 동안 반복 확인)
+            # - 네이버가 띄우는 브라우저 알림창(글쓰기 권한 없음/등급 부족/작성 중인 글 등)을 읽어서 기록
+            # - 글쓰기 버튼이 새 탭으로 열렸으면 그 탭으로 이동
+            # - 로그인 화면으로 튕겼으면 바로 중단
             title_area = None
-            
-            # 1. 1차 시도: 최상위 DOM에서 찾기
-            try:
-                print("최상위 DOM에서 제목 입력란을 탐색합니다...")
-                title_area = WebDriverWait(self.driver, 5).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "textarea.textarea_input, .ArticleWritingTitle textarea"))
-                )
-            except:
-                pass
-                
-            # 2. 2차 시도: cafe_main 프레임 안에서 찾기
-            if not title_area:
+            seen_alerts = []
+            title_sel = "textarea.textarea_input, .ArticleWritingTitle textarea"
+            print("제목 입력란(에디터) 로딩을 기다립니다...")
+            deadline = time.time() + 25
+            while time.time() < deadline and not title_area:
+                seen_alerts += self._take_alerts()
                 try:
-                    print("최상위에서 못 찾음. cafe_main 프레임 안에서 다시 시도합니다...")
-                    WebDriverWait(self.driver, 2).until(EC.frame_to_be_available_and_switch_to_it("cafe_main"))
-                    title_area = WebDriverWait(self.driver, 5).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "textarea.textarea_input, .ArticleWritingTitle textarea"))
-                    )
-                except:
-                    pass
+                    handles = self.driver.window_handles
+                    if handles and self.driver.current_window_handle != handles[-1]:
+                        print("-> 글쓰기 화면이 새 탭으로 열려 해당 탭으로 이동합니다.")
+                        self.driver.switch_to.window(handles[-1])
+                except Exception as e:
+                    seen_alerts += self._alert_text_from(e)
+                for frame in (None, "cafe_main"):
+                    try:
+                        self.driver.switch_to.default_content()
+                        if frame:
+                            self.driver.switch_to.frame(frame)
+                        found = self.driver.find_elements(By.CSS_SELECTOR, title_sel)
+                        if found:
+                            title_area = found[0]
+                            break
+                    except Exception as e:
+                        seen_alerts += self._alert_text_from(e)
+                if title_area:
+                    break
+                try:
+                    if "nid.naver.com" in self.driver.current_url:
+                        break
+                except Exception as e:
+                    seen_alerts += self._alert_text_from(e)
+                time.sleep(1)
+            if title_area:
+                print(f"제목 입력란을 찾았습니다.{' (알림창: ' + ' / '.join(seen_alerts) + ')' if seen_alerts else ''}")
 
             if title_area:
                 try:
@@ -957,8 +997,20 @@ class NaverCafeBot:
                     self._paste_text(title)
                 except Exception as e:
                     print(f"구버전 제목란도 찾을 수 없습니다: {e}")
-                    msg = self._visible_messages()
-                    return self._write_fail("글쓰기 화면(제목 입력란)이 열리지 않음" + (f" - 화면 메시지: {msg}" if msg else ""))
+                    seen_alerts += self._alert_text_from(e) + self._take_alerts()
+                    try:
+                        cur_url = self.driver.current_url
+                    except Exception:
+                        cur_url = ""
+                    if seen_alerts:
+                        detail = "알림창: " + " / ".join(dict.fromkeys(seen_alerts))
+                    elif "nid.naver.com" in cur_url:
+                        detail = "로그인 화면으로 이동됨 (로그인 풀림)"
+                    else:
+                        msg = self._visible_messages()
+                        where = "게시판 목록에 머무름" if cur_url and "write" not in cur_url.lower() else "글쓰기 주소이나 에디터 미표시"
+                        detail = f"화면 메시지: {msg}" if msg else f"{where}, 주소: {cur_url[:80]}"
+                    return self._write_fail(f"글쓰기 화면(제목 입력란)이 열리지 않음 - {detail}")
 
             time.sleep(1)
 
