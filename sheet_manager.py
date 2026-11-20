@@ -795,12 +795,13 @@ class GoogleSheetManager:
             print(f"Error forcing complete task row {row_index}: {e}")
             return False
 
-    def log_result(self, task, url):
-        """작업로그 시트에 기록 추가 (A열 공란, B열부터 입력)"""
+    def log_result(self, task, url, when=None):
+        """작업로그 시트에 기록 추가 (A열 공란, B열부터 입력)
+        실패 기록일 때는 url 자리에 실패 이유, when에 업로드 시도 시각(datetime)을 넘김"""
         try:
             if not getattr(self, 'log_sheet', None):
                 return
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
 
             # Constants removed, will be instance variables
             # Constants removed, will be instance variables

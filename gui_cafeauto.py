@@ -754,7 +754,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.47"
+__version__ = "1.48"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -2658,6 +2658,14 @@ del "%~f0"
             self.task_retry_counts[task_id_key] = 0
             return
 
+        # 작업로그 시트에도 실패 기록 (URL 칸에 실패 이유, 날짜 칸에 업로드 시도 시각)
+        try:
+            fail_reason = " ".join(msg.split("Stacktrace")[0].replace("작업 실패:", "").split())[:200]
+            attempt = "" if immediate else f"({current_retries + 1}/3회) "
+            self.sheet_mgr.log_result(task, f"실패{attempt and ' ' + attempt.strip()}: {fail_reason}", when=task.get('attempt_time'))
+        except Exception as log_err:
+            print(f"작업로그 실패 기록 에러: {log_err}")
+
         if immediate or current_retries >= 2:
             self.update_log_signal(f"[{task['name']}] 2회 이상 실패하여 해당 일정 칸에 에러 사유를 기록합니다.")
             
@@ -2689,6 +2697,8 @@ del "%~f0"
         """단일 작업 수행 로직"""
         # task는 딕셔너리
         self.update_log_signal(f"=== 작업 시작: {task['cafe_name']} - {task['board_name']} ===")
+        from datetime import datetime
+        task['attempt_time'] = datetime.now() # 작업로그 시트에 실패 기록할 때 '업로드 시도 시각'으로 사용
 
         # 화면/예약 목록을 불러온 뒤 다른 실행이 이미 이 단계를 올렸다면 중복 업로드(및 기존 글 삭제)하지 않음
         stage_idx = task.get('current_stage_idx')

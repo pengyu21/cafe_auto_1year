@@ -62,6 +62,10 @@ function checkNewRowsAndSendEmail() {
     // 빈 행 스킵
     if (!colB && !colD && !colE && !colG && !colH) return;
 
+    // 업로드 실패 기록(G열이 '실패'로 시작)은 '업로드 완료' 메일 대상 아님
+    // (3번 다 실패하면 카페작업리스트 일정 칸의 '에러'로 에러 메일이 따로 감)
+    if (colG.startsWith("실패")) return;
+
     // H열을 Date로 파싱
     const ts = parseTimestamp(colH);
     if (!ts) {
