@@ -754,7 +754,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.49"
+__version__ = "1.50"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -2681,8 +2681,13 @@ del "%~f0"
         # 작업로그 시트에도 실패 기록 (URL 칸에 실패 이유, 날짜 칸에 업로드 시도 시각)
         try:
             fail_reason = " ".join(msg.split("Stacktrace")[0].replace("작업 실패:", "").split())[:200]
-            attempt = "" if immediate else f"({current_retries + 1}/3회) "
-            self.sheet_mgr.log_result(task, f"실패{attempt and ' ' + attempt.strip()}: {fail_reason}", when=task.get('attempt_time'))
+            if "등급 부족" in fail_reason:
+                # 예) 실패 (등업 필요): 중급 발품사전 등급이 되시면 읽기가 가능한 게시판 입니다. (현재 등급: 새싹 발품)
+                log_text = "실패 (등업 필요): " + fail_reason.replace("등급 부족:", "", 1).strip()
+            else:
+                attempt = "" if immediate else f"({current_retries + 1}/3회) "
+                log_text = f"실패{attempt and ' ' + attempt.strip()}: {fail_reason}"
+            self.sheet_mgr.log_result(task, log_text, when=task.get('attempt_time'))
         except Exception as log_err:
             print(f"작업로그 실패 기록 에러: {log_err}")
 
