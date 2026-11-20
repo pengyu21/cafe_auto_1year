@@ -754,7 +754,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.48"
+__version__ = "1.49"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1578,10 +1578,16 @@ del "%~f0"
         # 캡챠 에러는 아래에서 사람별로 따로 표시하므로 단계별 에러 건수에서는 뺌 (같은 건이 두 번 세지지 않게)
         captcha_items = [it for it in summary['items'] if "캡챠" in it[5]]
         counts = [0] * len(summary['counts'])
+        # 등급 부족(등업 필요)도 따로 묶어서 보여줌
+        grade_items = [it for it in summary['items'] if "등급 부족" in it[5]]
         for it in summary['items']:
-            if "캡챠" not in it[5] and 0 < it[0] <= len(counts):
+            if "캡챠" not in it[5] and "등급 부족" not in it[5] and 0 < it[0] <= len(counts):
                 counts[it[0] - 1] += 1
         parts = [f"{i + 1}차 에러 ({c})" for i, c in enumerate(counts) if c]
+        if grade_items:
+            names = list(dict.fromkeys(f"{it[2]}({it[3]})" for it in grade_items))
+            more = f" 외 {len(names) - 3}건" if len(names) > 3 else ""
+            parts.insert(0, f"⬆ 등업 필요 ({len(names)}건): {', '.join(names[:3])}{more}")
         self._write_captcha_summary(captcha_items)
         # 캡챠(사전 로그인 + 업로드 실패)는 아이디 기준으로 한 사람당 한 번만, 이름을 바로 보여줌
         targets = self._captcha_login_ids()
@@ -1880,6 +1886,20 @@ del "%~f0"
                     item_name.setText(f"🔒 {task['name']}")
                     item_name.setForeground(QColor("#e74c3c"))
                     item_name.setFont(font)
+                # 등급이 모자라 못 올린 일정: '등업 필요 + 필요한 등급'으로 짧게 (네이버 안내 전체는 툴팁)
+                elif "등급 부족" in task.get('error', ''):
+                    m = re.search(r"등급 부족:\s*(.+?)\s*등급이\s*되시면", task['error'])
+                    cur = re.search(r"현재 등급:\s*([^)]+)\)", task['error'])
+                    text = "⬆ 등업 필요"
+                    if m:
+                        text += f": {m.group(1)}" + (f" (현재 {cur.group(1).strip()})" if cur else "")
+                    item_res.setText(text)
+                    item_res.setToolTip(task['error'])
+                    item_res.setForeground(QColor("#ffffff"))
+                    item_res.setBackground(QColor("#e67e22"))
+                    font = item_res.font()
+                    font.setBold(True)
+                    item_res.setFont(font)
                 # 에러가 기록된 일정은 빨간 글씨로 에러 내용 표시
                 elif task.get('error'):
                     item_res.setText(task['error'].replace("\n", " "))
@@ -2897,7 +2917,11 @@ del "%~f0"
                  pass
         else:
              reason = getattr(bot, 'last_write_error', '') or "요소 찾기, 시간 초과 등"
-             self.handle_task_error(task, f"작업 실패: 글쓰기 오류 ({reason})")
+             if getattr(bot, 'last_write_error_permanent', False):
+                 # 등급 부족처럼 재시도해도 안 풀리는 경우: 네이버 안내 문구 그대로 바로 에러 기록
+                 self.handle_task_error(task, f"작업 실패: {reason}", immediate=True)
+             else:
+                 self.handle_task_error(task, f"작업 실패: 글쓰기 오류 ({reason})")
 
     def get_content_order_for_task_idx(self, task_idx):
         # 사용자 요청: 전, 후, 본문 순서 (이미지 -> 텍스트)

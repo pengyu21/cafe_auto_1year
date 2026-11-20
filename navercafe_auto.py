@@ -99,6 +99,36 @@ class NaverCafeBot:
             pass
         return " / ".join(msgs)[:150]
 
+    def _grade_block_message(self):
+        """등급 부족 안내 화면이면 네이버 문구 그대로 반환, 아니면 ""
+        예) '등급 부족: 중급 발품사전 등급이 되시면 읽기가 가능한 게시판 입니다. (현재 등급: 새싹 발품)'"""
+        js = r"""
+        var t = (document.body && document.body.innerText) || '';
+        var m = t.match(/[^\n]*등급이\s*되시면[^\n]*가능한\s*게시판\s*입니다\.?/);
+        if (!m) return '';
+        var cur = t.match(/님은\s+([^\n]+?)\s*등급이시며/);
+        return m[0].trim() + (cur ? ' (현재 등급: ' + cur[1].trim() + ')' : '');
+        """
+        found = ""
+        for frame in (None, "cafe_main"):
+            try:
+                self.driver.switch_to.default_content()
+                if frame:
+                    self.driver.switch_to.frame(frame)
+                found = self.driver.execute_script(js) or ""
+                if found:
+                    break
+            except Exception:
+                pass
+        try:
+            self.driver.switch_to.default_content()
+        except Exception:
+            pass
+        if found:
+            print(f"-> 등급 부족 안내 감지: {found}")
+            return "등급 부족: " + found[:150]
+        return ""
+
     def _take_alerts(self):
         """떠 있는 브라우저 알림창(alert/confirm)의 문구를 읽고 닫기
         (confirm은 '취소'로 닫음 - '작성 중인 글 이어쓰기'를 수락하면 예전 임시글이 섞여 내용이 중복되므로)"""
@@ -835,7 +865,15 @@ class NaverCafeBot:
         """
         assert self.driver is not None
         self.last_write_error = ""
+        self.last_write_error_permanent = False
         try:
+            # 등급이 모자라 게시판 대신 '○○ 등급이 되시면 ... 가능한 게시판 입니다' 안내가 뜬 경우
+            # (글쓰기 버튼 대신 다른 글쓰기 링크를 눌러 '제목 입력란이 열리지 않음'으로 잘못 기록되던 것)
+            grade_msg = self._grade_block_message()
+            if grade_msg:
+                self.last_write_error_permanent = True
+                return self._write_fail(grade_msg)
+
             # 글쓰기 버튼 찾기 및 클릭 (Retry Logic)
             for attempt in range(3):
                 try:
@@ -1002,6 +1040,10 @@ class NaverCafeBot:
                         cur_url = self.driver.current_url
                     except Exception:
                         cur_url = ""
+                    grade_msg = self._grade_block_message()
+                    if grade_msg:
+                        self.last_write_error_permanent = True
+                        return self._write_fail(grade_msg)
                     if seen_alerts:
                         detail = "알림창: " + " / ".join(dict.fromkeys(seen_alerts))
                     elif "nid.naver.com" in cur_url:
