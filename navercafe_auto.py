@@ -1,4 +1,5 @@
 import subprocess
+import json
 from pathlib import Path
 from selenium.webdriver.common.action_chains import ActionChains
 import time
@@ -198,6 +199,13 @@ class NaverCafeBot:
                 port_in_use = True
             sock.close()
 
+        # [세션 유지] 포트에 떠 있는 크롬이 이 아이디의 프로필 폴더로 열린 것이 아니면 (다른 아이디/다른 프로그램)
+        # 그대로 붙으면 엉뚱한 계정 세션을 쓰게 되므로 그 프로세스를 정상 종료 요청 후 끄고 이 아이디 프로필로 새로 띄움
+        if port_in_use and profile_dir and not self._port_uses_profile(port, profile_dir):
+            print(f"DEBUG: Port {port} is used by a different profile. Restarting with {profile_dir}")
+            self._kill_port(port)
+            port_in_use = False
+
         if port_in_use:
             print(f"DEBUG: Port {port} is already open. Attaching to existing browser.")
             # [수정] 디버거로 붙을 때는 기존 시작 옵션(excludeSwitches 등)을 넣으면 에러가 발생하므로 초기화
@@ -276,6 +284,70 @@ class NaverCafeBot:
         self.driver.implicitly_wait(2) # 10 -> 2로 단축 (속도 개선)
         if not port_in_use:
             self.driver.maximize_window()
+
+    def _port_uses_profile(self, port, profile_dir):
+        """포트를 열고 있는 크롬의 --user-data-dir가 profile_dir인지 (확인할 수 없으면 True로 보고 기존처럼 붙음)"""
+        try:
+            out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True,
+                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0).stdout
+            pid = None
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[1].endswith(f":{port}") and parts[3] == "LISTENING":
+                    pid = int(parts[4])
+                    break
+            if not pid:
+                return True
+            ps = (f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine")
+            cmd = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0).stdout
+            if not cmd.strip():
+                return True
+            norm = lambda p: os.path.normcase(os.path.abspath(p.strip().strip('"'))).rstrip("\\/")
+            import re as _re
+            m = _re.search(r'--user-data-dir=("([^"]+)"|(\S+))', cmd)
+            if not m:
+                return False # 기본 크롬 프로필(사용자 개인 크롬 등) -> 이 아이디 것이 아님
+            return norm(m.group(2) or m.group(3)) == norm(profile_dir)
+        except Exception as e:
+            print(f"DEBUG: profile check failed ({e}) - attaching as before")
+            return True
+
+    def _kill_port(self, port):
+        """해당 포트의 크롬에 정상 종료를 요청하고, 안 꺼지면 강제 종료"""
+        import socket
+        try:
+            import urllib.request
+            # 디버깅 포트로 정상 종료 요청 (쿠키 저장되게)
+            ws = None
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=3) as r:
+                ws = json.loads(r.read().decode()).get("webSocketDebuggerUrl")
+        except Exception:
+            ws = None
+        if ws:
+            try:
+                tmp = webdriver.Chrome(service=Service(ChromeDriverManager().install()),
+                                       options=self._attach_options(port))
+                tmp.execute_cdp_cmd("Browser.close", {})
+            except Exception:
+                pass
+        for _ in range(20):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                if sock.connect_ex(('127.0.0.1', int(port))) != 0:
+                    time.sleep(1)
+                    return
+            time.sleep(0.5)
+        try:
+            subprocess.run(f'FOR /F "tokens=5" %a in (\'netstat -ano ^| findstr :{port}\') do taskkill /F /PID %a', shell=True, capture_output=True)
+        except Exception:
+            pass
+        time.sleep(1)
+
+    @staticmethod
+    def _attach_options(port):
+        o = Options()
+        o.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
+        return o
 
     def close_browser(self, wait=10):
         # 10초 대기 (마지막 작업 결과를 확인할 수 있도록 창 유지)

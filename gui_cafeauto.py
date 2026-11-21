@@ -37,8 +37,8 @@ PRELOGIN_CAPTCHA_RETRY_MIN = 30
 # [보호조치 방지] 캡챠가 뜬 아이디는 이 시간(시간) 동안 자동 로그인(아이디/비밀번호 입력)을 하지 않음
 # (예전엔 30초 뒤 + 30분마다 계속 다시 입력해서, 캡챠를 못 푼 로그인 실패가 쌓여 네이버 보호조치로 계정이 잠김)
 CAPTCHA_COOLDOWN_HOURS = 24
-# [보호조치 방지] 캡챠가 이 횟수만큼 뜨면 수동 로그인이 확인될 때까지 자동 로그인을 완전히 멈춤
-CAPTCHA_MAX_AUTO_HITS = 2
+# [보호조치 방지] 캡챠가 이 횟수만큼 뜨면 수동 로그인이 확인될 때까지 자동 로그인을 완전히 멈춤 (1 = 캡챠 뒤 재시도 없음)
+CAPTCHA_MAX_AUTO_HITS = 1
 # [보호조치 방지] 같은 아이디에 아이디/비밀번호를 넣는 자동 로그인은 이 시간(시간)에 한 번까지만
 AUTO_LOGIN_MIN_INTERVAL_HOURS = 6
 # 여러 아이디를 연달아 자동 로그인하면 캡챠가 잘 뜨므로 자동 로그인 사이 최소 간격(초) - 매번 이 범위에서 랜덤
@@ -103,8 +103,21 @@ def get_data_dir():
             pass
     return data_dir
 
+def get_profile_dir(uid):
+    """아이디 전용 크롬 프로필 폴더 (로그인 쿠키가 여기에 저장됨).
+    시트 아이디 앞뒤 공백 때문에 다른 폴더가 생겨 로그인이 풀린 것처럼 보이지 않게 공백을 떼어 씀
+    (예전에 공백 포함 이름으로 만들어진 폴더만 있으면 그 폴더를 그대로 사용)"""
+    raw = str(uid or "")
+    base = os.path.join(get_data_dir(), "chrome_profiles")
+    clean = os.path.abspath(os.path.join(base, raw.strip()))
+    legacy = os.path.abspath(os.path.join(base, raw))
+    if raw != raw.strip() and os.path.isdir(legacy) and not os.path.isdir(clean):
+        return legacy
+    return clean
+
 def get_port_for_id(uid):
     if not uid: return 9222
+    uid = str(uid).strip()
     port_file = os.path.join(get_data_dir(), 'port_mapping.json')
     mapping = {}
     if os.path.exists(port_file):
@@ -132,7 +145,10 @@ def get_port_for_id(uid):
     return new_port
 
 def set_port_for_id(uid, port):
-    if not uid: return
+    """사전 로그인 화면에서 바꾼 포트 저장. 다른 아이디가 쓰는 포트면 저장하지 않고 False
+    (두 아이디가 같은 포트를 쓰면 다른 아이디의 크롬(프로필)에 붙어 세션이 꼬임)"""
+    if not uid: return False
+    uid = str(uid).strip()
     port_file = os.path.join(get_data_dir(), 'port_mapping.json')
     mapping = {}
     if os.path.exists(port_file):
@@ -142,12 +158,15 @@ def set_port_for_id(uid, port):
         except:
             pass
             
+    if any(int(p) == int(port) and u != uid for u, p in mapping.items()):
+        return False
     mapping[uid] = int(port)
     try:
         with open(port_file, 'w', encoding='utf-8') as f:
             json.dump(mapping, f, ensure_ascii=False, indent=4)
     except:
         pass
+    return True
 
 class TaskCountCalendar(QCalendarWidget):
     """날짜별 예약 건수를 표시하는 커스텀 달력 위젯"""
@@ -765,7 +784,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.54"
+__version__ = "1.55"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -2108,7 +2127,7 @@ del "%~f0"
                                 port = get_port_for_id(uid)
                                 
                                 # 공유 폴더 충돌 방지를 위해 로컬 사용자 폴더 내에 크롬 프로필 생성
-                                profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
+                                profile_dir = get_profile_dir(uid)
                             
                                 self.update_log_signal(f"브라우저 실행 (ID: {uid}, Port: {port})")
                                 current_bot = NaverCafeBot()
@@ -2311,7 +2330,7 @@ del "%~f0"
         import random
         from datetime import datetime, timedelta
         port = get_port_for_id(uid)
-        profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
+        profile_dir = get_profile_dir(uid)
         if label == "사전 로그인":
             self.update_log_signal(f">>> [사전 로그인] {uid} 업로드 예정({when}) 전 로그인 상태 확인 (Port: {port})")
         else:
@@ -2663,7 +2682,7 @@ del "%~f0"
         self.line_prep_port.setText(str(port))
         
         # UI에 현재 경로 표시
-        profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
+        profile_dir = get_profile_dir(uid)
         if hasattr(self, 'lbl_profile_path'):
             self.lbl_profile_path.setText(f"(캐시: {profile_dir})")
         
@@ -2675,14 +2694,20 @@ del "%~f0"
             return
             
         port = int(port_str)
-        profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
+        profile_dir = get_profile_dir(uid)
         
         self.log(f">>> 사전 로그인용 브라우저를 엽니다 (ID: {uid}, Port: {port})")
         self.log(f"    브라우저가 열리면 수동으로 [로그인 상태 유지]를 꼭 체크하고 로그인해주세요.")
         self.log(f"    로그인 후 브라우저를 그대로 두셔도 자동 지원되며, 닫아도 세션이 유지됩니다.")
         
         # [수정] 사전로그인 시 수정한 포트번호가 봇 실행 시에도 반영되도록 저장합니다.
-        set_port_for_id(uid, port)
+        # 다른 아이디가 쓰는 포트면 세션이 꼬이므로 원래 포트로 되돌림
+        if not set_port_for_id(uid, port):
+            old = get_port_for_id(uid)
+            QMessageBox.warning(self, "포트 중복", f"포트 {port}는 다른 아이디가 쓰고 있습니다.\n"
+                                f"아이디마다 크롬 로그인 정보가 따로 저장되므로 원래 포트({old})로 엽니다.")
+            port = old
+            self.line_prep_port.setText(str(port))
         
         # 백그라운드 스레드에서 브라우저 열기 (GUI 멈춤 방지)
         threading.Thread(target=self._run_prep_browser, args=(port, profile_dir, uid)).start()
@@ -2833,7 +2858,7 @@ del "%~f0"
                     port = get_port_for_id(uid)
                         
                     # 공유 폴더 충돌 방지를 위해 로컬 사용자 폴더 내에 크롬 프로필 생성
-                    profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
+                    profile_dir = get_profile_dir(uid)
                     
                     self.update_log_signal(f"브라우저 실행 (ID: {uid}, Port: {port})")
                     current_bot = NaverCafeBot()
