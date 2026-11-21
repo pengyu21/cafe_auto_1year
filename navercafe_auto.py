@@ -282,13 +282,27 @@ class NaverCafeBot:
         import time
         time.sleep(wait)
         
+        # [세션 유지] 크롬을 강제 종료(taskkill /F)하면 방금 갱신된 로그인 쿠키가 디스크에 저장되지 않아
+        # 다음에 열 때 로그인이 풀려 있는 경우가 있음 -> 먼저 크롬에 정상 종료를 요청하고 프로세스가 내려갈 때까지 기다림
         if self.driver:
+            try:
+                self.driver.execute_cdp_cmd("Browser.close", {})
+            except:
+                pass
+            if self.port:
+                import socket
+                for _ in range(20): # 최대 10초
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                        if sock.connect_ex(('127.0.0.1', int(self.port))) != 0:
+                            break
+                    time.sleep(0.5)
+                time.sleep(1) # 쿠키/프로필 파일 쓰기 마무리 여유
             try:
                 self.driver.quit()
             except:
                 pass
-        
-        # 잔여 크롬 프로세스 강제 종료
+
+        # 정상 종료가 안 된 잔여 크롬 프로세스만 강제 종료
         if self.port:
             import subprocess
             try:

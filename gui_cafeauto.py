@@ -41,6 +41,11 @@ CAPTCHA_COOLDOWN_HOURS = 24
 CAPTCHA_MAX_AUTO_HITS = 2
 # 여러 아이디를 연달아 자동 로그인하면 캡챠가 잘 뜨므로 자동 로그인 사이 최소 간격(초) - 매번 이 범위에서 랜덤
 AUTO_LOGIN_GAP_SEC = (120, 240)
+# [세션 유지] 매일 새벽 이 시간대(시)에 시트의 모든 아이디 브라우저를 한 번씩 열어 네이버/카페에 접속해 로그인 세션을 갱신
+# (업로드가 몇 주씩 없는 아이디는 접속이 없어 로그인이 풀리기 쉬움). 풀려 있으면 자동 로그인(캡챠 기록에 따라 막힐 수 있음)
+SESSION_KEEPALIVE_HOURS = (3, 6)
+# 세션 유지 확인 사이 랜덤 간격(초) - 여러 아이디가 한꺼번에 접속하는 패턴을 피함
+SESSION_KEEPALIVE_GAP_SEC = (30, 90)
 # 업로드 실패 시 재시도 간격(분): 1번째 실패 후 10분, 2번째 실패 후 30분 뒤 재시도, 3번째 실패하면 일정 칸에 에러 기록
 # (예전엔 1분마다 바로 재시도해서 네이버 쪽 일시적 문제(서버 지연·연속 작업 제한 등)가 풀리기 전에 3번 다 실패하던 문제)
 UPLOAD_RETRY_DELAY_MIN = [10, 30]
@@ -757,7 +762,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.52"
+__version__ = "1.53"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -2146,6 +2151,13 @@ del "%~f0"
             except Exception as e:
                 self.update_log_signal(f"사전 로그인 확인 중 오류: {e}")
 
+            # [세션 유지] 새벽 시간대에 모든 아이디의 로그인 세션을 하루 한 번 갱신
+            try:
+                with self.task_run_lock:
+                    self.keep_sessions_alive([t for t in latest_tasks if id(t) not in deferred_keys])
+            except Exception as e:
+                self.update_log_signal(f"세션 유지 확인 중 오류: {e}")
+
             # 주기적 대기 (60초 - 구글 API 할당량 초과 방지)
             time.sleep(60)
                 
@@ -2218,58 +2230,141 @@ del "%~f0"
                 continue
             self.prelogin_checked[uid] = now
 
-            port = get_port_for_id(uid)
-            profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
-            when = res_time.strftime("%m-%d %H:%M")
-            self.update_log_signal(f">>> [사전 로그인] {uid} 업로드 예정({when}) 전 로그인 상태 확인 (Port: {port})")
+            self._prelogin_one(uid, task, res_time.strftime("%m-%d %H:%M"))
 
-            bot = NaverCafeBot()
-            keep_open = False
+    def keep_sessions_alive(self, tasks):
+        """SESSION_KEEPALIVE_HOURS 시간대에 시트의 모든 아이디를 하루 한 번씩 열어 로그인 세션 갱신.
+        한 번에 한 아이디만 처리하고 돌아감 (업로드 예약이 생기면 바로 업로드가 먼저 돌 수 있게)"""
+        import time
+        import random
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        if not (SESSION_KEEPALIVE_HOURS[0] <= now.hour < SESSION_KEEPALIVE_HOURS[1]):
+            return
+        if not hasattr(self, 'keepalive_done'):
+            self.keepalive_done = {} # uid -> 세션 유지를 마친 날짜
+        if not hasattr(self, 'prelogin_checked'):
+            self.prelogin_checked = {}
+        today = now.date()
+        if time.time() < getattr(self, 'keepalive_next_at', 0):
+            return
+
+        def parse_time(t):
+            for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(str(t.get('next_run', '')), fmt)
+                except Exception:
+                    pass
+            return None
+
+        # 업로드 시각이 됐거나 곧(PRELOGIN_SKIP_MIN분 이내) 될 작업이 있으면 세션 유지는 미룸
+        times = [rt for rt in (parse_time(t) for t in tasks) if rt]
+        if any(rt <= now + timedelta(minutes=PRELOGIN_SKIP_MIN) for rt in times):
+            return
+
+        # 아이디별 대표 작업 (진행 중인 작업 우선 -> 캡챠 표시를 그 칸에 할 수 있게)
+        by_uid = {}
+        for t in tasks:
+            uid = t.get('id')
+            if not uid or not t.get('pw'):
+                continue
+            cur = by_uid.get(uid)
+            if cur is None or (cur.get('is_completed') and not t.get('is_completed')):
+                by_uid[uid] = t
+        for uid, task in by_uid.items():
+            if self.keepalive_done.get(uid) == today:
+                continue
+            # 최근 몇 시간 안에 이미 브라우저를 열어 확인한 아이디(사전 로그인 등)는 건너뜀
+            last = self.prelogin_checked.get(uid)
+            if last and now - last < timedelta(hours=6):
+                self.keepalive_done[uid] = today
+                continue
+            # 수동 로그인을 기다리며 브라우저가 열려 있는 아이디는 건드리지 않음
+            if uid in self.login_watchers:
+                continue
+            self.keepalive_done[uid] = today
+            self.prelogin_checked[uid] = now
+            touch_url = None
             try:
-                bot.start_browser(port=port, profile_dir=profile_dir)
-                if bot.login(uid, task.get('pw', '')):
-                    self.update_log_signal(f"    [사전 로그인] {uid} 로그인 유지 중 - 확인 완료")
-                    self.on_login_confirmed(uid, task)
-                elif task.get('pw') and self._auto_login_with_retry(bot, uid, task['pw']):
-                    self.update_log_signal(f"    [사전 로그인] {uid} 로그인이 풀려 있어 자동 로그인 완료")
-                    self.on_login_confirmed(uid, task)
-                else:
-                    keep_open = True
+                touch_url = self.sheet_mgr.get_cafe_url(task.get('cafe_name', '')) if task.get('cafe_name') else None
+            except Exception:
+                pass
+            when = ""
+            rt = parse_time(task)
+            if rt and not task.get('is_completed'):
+                when = rt.strftime("%m-%d %H:%M")
+            self._prelogin_one(uid, task, when, label="세션 유지", touch_url=touch_url)
+            self.keepalive_next_at = time.time() + random.uniform(*SESSION_KEEPALIVE_GAP_SEC)
+            return
+
+    def _prelogin_one(self, uid, task, when, label="사전 로그인", touch_url=None):
+        """아이디 하나의 브라우저를 열어 로그인 상태 확인 -> 풀려 있으면 자동 로그인(캡챠 기록에 따라 막힐 수 있음),
+        실패하면 브라우저를 로그인 화면에 띄워둔 채 알림. touch_url이 있으면 로그인 확인 후 그 페이지(카페)도 잠깐 방문"""
+        import time
+        import random
+        from datetime import datetime, timedelta
+        port = get_port_for_id(uid)
+        profile_dir = os.path.abspath(os.path.join(get_data_dir(), "chrome_profiles", uid))
+        if label == "사전 로그인":
+            self.update_log_signal(f">>> [사전 로그인] {uid} 업로드 예정({when}) 전 로그인 상태 확인 (Port: {port})")
+        else:
+            self.update_log_signal(f">>> [{label}] {uid} 로그인 상태 확인 (Port: {port})")
+
+        bot = NaverCafeBot()
+        keep_open = False
+        try:
+            bot.start_browser(port=port, profile_dir=profile_dir)
+            if bot.login(uid, task.get('pw', '')):
+                self.update_log_signal(f"    [{label}] {uid} 로그인 유지 중 - 확인 완료")
+                if touch_url:
+                    # 카페까지 한 번 들어가 세션을 사용 중인 상태로 갱신 (오래 안 쓰면 로그인이 풀리는 것 방지)
                     try:
-                        if "nidlogin" not in bot.driver.current_url and "login" not in bot.driver.current_url:
-                            bot.driver.get("https://nid.naver.com/nidlogin.login")
-                    except:
+                        bot.driver.get(touch_url)
+                        time.sleep(random.uniform(4, 8))
+                    except Exception:
                         pass
-                    if bot.last_login_error == "captcha":
-                        title, reason = "캡챠로 수동로그인 필요", "자동 로그인 중 캡챠(자동입력 방지)가 떴습니다."
+                self.on_login_confirmed(uid, task)
+            elif task.get('pw') and self._auto_login_with_retry(bot, uid, task['pw']):
+                self.update_log_signal(f"    [{label}] {uid} 로그인이 풀려 있어 자동 로그인 완료")
+                self.on_login_confirmed(uid, task)
+            else:
+                keep_open = True
+                try:
+                    if "nidlogin" not in bot.driver.current_url and "login" not in bot.driver.current_url:
+                        bot.driver.get("https://nid.naver.com/nidlogin.login")
+                except:
+                    pass
+                if bot.last_login_error == "captcha":
+                    title, reason = "캡챠로 수동로그인 필요", "자동 로그인 중 캡챠(자동입력 방지)가 떴습니다."
+                    if re.match(r"\d{4}-\d{2}-\d{2}", str(task.get('next_run', ''))):
                         self.set_captcha_flag(task, when)
-                        # PRELOGIN_CAPTCHA_RETRY_MIN분 뒤 로그인 상태(쿠키)만 다시 확인 - 자동 로그인 입력은 캡챠 기록에 따라 막힘
-                        self.prelogin_checked[uid] = now - timedelta(hours=PRELOGIN_RECHECK_HOURS) + timedelta(minutes=PRELOGIN_CAPTCHA_RETRY_MIN)
-                        reason += (f"\n보호조치 방지: {self._captcha_lock_reason(uid) or '자동 로그인 일시 중지'}"
-                                   f"\n(로그인 상태만 {PRELOGIN_CAPTCHA_RETRY_MIN}분마다 확인하고, 아이디/비밀번호는 다시 입력하지 않습니다)")
-                    else:
-                        title, reason = "사전 로그인 필요", "로그인이 풀려 있고 자동 로그인에 실패했습니다 (비밀번호/추가 인증 등)."
-                    self.update_log_signal(f"    [사전 로그인] {uid} {title} - 열린 브라우저에서 직접 로그인해주세요.")
-                    # 열어둔 브라우저에서 로그인하면 바로 캡챠 표시를 해제하도록 지켜봄 (다음 재시도까지 기다리지 않게)
-                    if uid not in self.login_watchers:
-                        self.login_watchers.add(uid)
-                        threading.Thread(target=self._watch_manual_login, args=(uid, port, profile_dir), daemon=True).start()
-                    self.alert_signal(
-                        f"login:{uid}",
-                        title,
-                        f"[{uid}] 업로드 예정: {when} ({task.get('name', '')} / {task.get('cafe_name', '')})\n\n"
-                        f"{reason}\n"
-                        f"열려 있는 브라우저(Port {port})에서 '로그인 상태 유지'를 체크하고 직접 로그인해주세요."
-                    )
-            except Exception as e:
-                self.update_log_signal(f"    [사전 로그인] {uid} 확인 중 오류: {e}")
-            finally:
-                # 실패 시엔 사용자가 로그인할 수 있도록 브라우저를 그대로 둠 (업로드 시 같은 포트로 이어서 사용)
-                if not keep_open:
-                    try:
-                        bot.close_browser(wait=0)
-                    except:
-                        pass
+                    # PRELOGIN_CAPTCHA_RETRY_MIN분 뒤 로그인 상태(쿠키)만 다시 확인 - 자동 로그인 입력은 캡챠 기록에 따라 막힘
+                    self.prelogin_checked[uid] = datetime.now() - timedelta(hours=PRELOGIN_RECHECK_HOURS) + timedelta(minutes=PRELOGIN_CAPTCHA_RETRY_MIN)
+                    reason += (f"\n보호조치 방지: {self._captcha_lock_reason(uid) or '자동 로그인 일시 중지'}"
+                               f"\n(로그인 상태만 {PRELOGIN_CAPTCHA_RETRY_MIN}분마다 확인하고, 아이디/비밀번호는 다시 입력하지 않습니다)")
+                else:
+                    title, reason = "사전 로그인 필요", "로그인이 풀려 있고 자동 로그인에 실패했습니다 (비밀번호/추가 인증 등)."
+                self.update_log_signal(f"    [{label}] {uid} {title} - 열린 브라우저에서 직접 로그인해주세요.")
+                # 열어둔 브라우저에서 로그인하면 바로 캡챠 표시를 해제하도록 지켜봄 (다음 재시도까지 기다리지 않게)
+                if uid not in self.login_watchers:
+                    self.login_watchers.add(uid)
+                    threading.Thread(target=self._watch_manual_login, args=(uid, port, profile_dir), daemon=True).start()
+                self.alert_signal(
+                    f"login:{uid}",
+                    title,
+                    f"[{uid}] {'업로드 예정: ' + when if when else label} ({task.get('name', '')} / {task.get('cafe_name', '')})\n\n"
+                    f"{reason}\n"
+                    f"열려 있는 브라우저(Port {port})에서 '로그인 상태 유지'를 체크하고 직접 로그인해주세요."
+                )
+        except Exception as e:
+            self.update_log_signal(f"    [{label}] {uid} 확인 중 오류: {e}")
+        finally:
+            # 실패 시엔 사용자가 로그인할 수 있도록 브라우저를 그대로 둠 (업로드 시 같은 포트로 이어서 사용)
+            if not keep_open:
+                try:
+                    bot.close_browser(wait=0)
+                except:
+                    pass
 
     def _captcha_lock_path(self):
         return os.path.join(get_data_dir(), "captcha_lock.json")
