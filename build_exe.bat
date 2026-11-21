@@ -17,7 +17,9 @@ echo.
 if exist "dist\NaverCafeAuto.exe" (
     echo =========================================
     echo Build Successful!
-    echo Executable is located at: dist\NaverCafeAuto.exe
+    echo Moving executable to root folder...
+    copy /Y "dist\NaverCafeAuto.exe" "NaverCafeAuto.exe"
+    echo Executable is located at: NaverCafeAuto.exe
     echo =========================================
 ) else (
     echo =========================================

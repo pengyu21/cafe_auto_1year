@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>네이버 카페 자동 포스팅 사용 설명서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+/* 레이아웃: 왼쪽 고정 목차 + 오른쪽 본문. 본문 위쪽에 실제 대시보드 모형(번호 표시)을 두고 아래 설명이 같은 번호를 따름 */
+:root {
+  --ink: #1d2733;
+  --muted: #5d6b7a;
+  --paper: #f6f8fb;
+  --surface: #ffffff;
+  --line: #dde3ea;
+  --accent: #1f6fd1;
+  --accent-soft: #e6f0fc;
+  --ok: #2e8a3e;
+  --warn: #c76a00;
+  --bad: #d23b3b;
+  --bad-soft: #fdecec;
+  --warn-soft: #fff3e2;
+  --ok-soft: #e7f5ea;
+  --font-body: "IBM Plex Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+  --font-mono: "IBM Plex Mono", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: #e4e9ef; --muted: #9aa7b5; --paper: #12171d; --surface: #1a2129; --line: #2c3540;
+    --accent: #6aa8f0; --accent-soft: #1b2a3d; --ok: #6cc47c; --warn: #f0a24a; --bad: #f07a7a;
+    --bad-soft: #3a1f22; --warn-soft: #3a2b18; --ok-soft: #1c3322; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ink: #e4e9ef; --muted: #9aa7b5; --paper: #12171d; --surface: #1a2129; --line: #2c3540;
+  --accent: #6aa8f0; --accent-soft: #1b2a3d; --ok: #6cc47c; --warn: #f0a24a; --bad: #f07a7a;
+  --bad-soft: #3a1f22; --warn-soft: #3a2b18; --ok-soft: #1c3322; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 16px; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: var(--font-body); font-size: 16px; line-height: 1.7;
+  word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.wrap { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 40px; max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; }
+nav.toc { position: sticky; top: 24px; align-self: start; font-size: 14px; }
+nav.toc .ver { display: inline-block; font-family: var(--font-mono); font-size: 12px; color: var(--accent); background: var(--accent-soft); padding: 2px 8px; border-radius: 999px; margin-bottom: 12px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: toc; }
+nav.toc li { counter-increment: toc; }
+nav.toc a { display: flex; gap: 10px; padding: 6px 10px; border-radius: 6px; color: var(--muted); text-decoration: none; }
+nav.toc a::before { content: counter(toc); font-family: var(--font-mono); font-size: 12px; color: var(--accent); min-width: 14px; padding-top: 2px; }
+nav.toc a:hover { background: var(--surface); color: var(--ink); }
+
+main { min-width: 0; display: grid; gap: 56px; }
+header.top h1 { font-size: 34px; line-height: 1.3; margin: 0 0 8px; text-wrap: balance; letter-spacing: -0.02em; }
+header.top p { margin: 0; color: var(--muted); max-width: 62ch; }
+h2 { font-size: 24px; margin: 0 0 6px; letter-spacing: -0.01em; text-wrap: balance; }
+h2 + .lead { margin: 0 0 20px; color: var(--muted); max-width: 65ch; }
+h3 { font-size: 18px; margin: 0 0 8px; text-wrap: balance; }
+section { display: grid; gap: 0; }
+p, li { max-width: 68ch; }
+.stack { display: grid; gap: 16px; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px 22px; }
+.callout { border-left: 4px solid var(--warn); background: var(--warn-soft); padding: 14px 18px; border-radius: 0 8px 8px 0; }
+.callout.bad { border-color: var(--bad); background: var(--bad-soft); }
+.callout.ok { border-color: var(--ok); background: var(--ok-soft); }
+.callout strong:first-child { display: block; margin-bottom: 2px; }
+.callout p { margin: 0; }
+
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; counter-reset: st; }
+ol.steps > li { counter-increment: st; display: grid; grid-template-columns: 30px 1fr; gap: 12px; align-items: start; }
+ol.steps > li::before { content: counter(st); width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 13px; font-weight: 700; display: grid; place-items: center; margin-top: 2px; }
+.ui { display: inline-block; font-size: 0.9em; font-weight: 600; padding: 0 7px; border-radius: 4px; border: 1px solid var(--line); background: var(--paper); white-space: nowrap; }
+.mono { font-family: var(--font-mono); font-size: 0.92em; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+
+/* 대시보드 모형: 실제 프로그램 색을 그대로 쓰므로 테마와 무관하게 고정 */
+.shot { background: #f5f7fa; border: 1px solid #c9d1db; border-radius: 10px; overflow: hidden; color: #333; font-size: 12px; line-height: 1.4; box-shadow: 0 6px 24px rgba(20, 40, 70, .12); }
+.shot-scroll { overflow-x: auto; }
+.shot-inner { min-width: 760px; padding: 12px; display: grid; gap: 8px; }
+.titlebar { background: #fff; border-bottom: 1px solid #dcdfe6; padding: 7px 12px; font-size: 12px; color: #555; display: flex; justify-content: space-between; }
+.row { display: flex; gap: 8px; align-items: center; }
+.b { position: relative; flex: 1; height: 32px; border-radius: 4px; display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 12px; }
+.b.load { background: #409eff; } .b.start { background: #67c23a; } .b.cancel { background: #f56c6c; } .b.cal { background: #f39c12; }
+.b.mode { background: #fff; border: 1px solid #dcdfe6; color: #333; display: flex; justify-content: center; gap: 8px; }
+.b.mode i { font-style: normal; padding: 3px 12px; border-radius: 3px; font-size: 11px; }
+.b.mode .on { background: #2ecc71; color: #fff; } .b.mode .off { background: #f0f2f5; color: #606266; border: 1px solid #dcdfe6; }
+.pre { position: relative; display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+.pre .combo { border: 1px solid #dcdfe6; background: #fff; padding: 4px 8px; border-radius: 3px; min-width: 190px; }
+.pre .port { border: 1px solid #dcdfe6; background: #fff; padding: 4px 8px; border-radius: 3px; width: 50px; }
+.pre .open { background: #8e44ad; color: #fff; font-weight: 700; padding: 5px 12px; border-radius: 4px; }
+.panes { display: grid; grid-template-columns: 1.9fr 1fr; gap: 10px; }
+.pane { position: relative; display: grid; gap: 4px; }
+.pane-h { display: flex; gap: 8px; align-items: center; font-weight: 700; }
+.pane-h .chk { font-weight: 400; color: #606266; }
+.pane-h .err { margin-left: auto; color: #e74c3c; font-weight: 700; font-size: 11px; }
+.pane-h .lgn { background: #e74c3c; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+.tbl { background: #fff; border: 1px solid #ebeef5; border-radius: 3px; overflow: hidden; }
+.tbl div { display: grid; grid-template-columns: 22px 30px 92px 64px 60px 1fr; border-top: 1px solid #ebeef5; }
+.tbl div:first-child { border-top: 0; background: #f5f7fa; color: #909399; font-weight: 600; }
+.tbl span { padding: 4px 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tbl .red { background: #e74c3c; color: #fff; font-weight: 700; }
+.tbl .redtxt { color: #e74c3c; font-weight: 700; }
+.tbl .green { color: #27ae60; font-weight: 700; }
+.tbl .fileless { background: #e74c3c; color: #fff; font-weight: 700; }
+.tbl.comp div { grid-template-columns: 22px 1fr 78px 72px; }
+.tbl .orange { color: #e67e22; font-weight: 700; }
+.log { background: #2b2b2b; color: #e8e8e8; border-radius: 4px; padding: 6px 8px; font-family: var(--font-mono); font-size: 10.5px; height: 92px; overflow: hidden; }
+.resetbtn { background: #e6a23c; color: #fff; text-align: center; font-weight: 700; padding: 6px; border-radius: 4px; }
+.sheetlink { text-align: center; color: #409eff; font-weight: 700; padding: 4px; position: relative; }
+.n { position: absolute; top: -9px; left: -7px; width: 21px; height: 21px; border-radius: 50%; background: #1d2733; color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); z-index: 2; }
+.n.inl { position: static; flex: none; }
+
+/* 구글 시트 모형: 실제 시트 화면처럼 보이도록 테마와 무관하게 고정 */
+.gs { background: #fff; border: 1px solid #c9d1db; border-radius: 10px; overflow: hidden; color: #202124; font-family: Arial, "Malgun Gothic", sans-serif; font-size: 11.5px; line-height: 1.35; box-shadow: 0 6px 24px rgba(20, 40, 70, .12); }
+.gs-top { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #e3e3e3; background: #f9fbfd; }
+.gs-top .doc { font-size: 13px; color: #202124; }
+.gs-top .logo { width: 18px; height: 22px; background: #0f9d58; border-radius: 2px; position: relative; flex: none; }
+.gs-top .logo::after { content: ""; position: absolute; inset: 7px 4px 5px; border: 1.5px solid #fff; border-radius: 1px; }
+.gs-fx { display: flex; border-bottom: 1px solid #e3e3e3; font-size: 12px; }
+.gs-fx .ref { width: 70px; padding: 4px 8px; border-right: 1px solid #e3e3e3; color: #444; }
+.gs-fx .f { padding: 4px 8px; color: #444; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gs-fx .f i { font-style: italic; color: #999; margin-right: 8px; }
+.gs-scroll { overflow-x: auto; }
+.gs table { border-collapse: collapse; table-layout: fixed; }
+.gs th, .gs td { border: 1px solid #e2e3e3; padding: 3px 5px; vertical-align: top; white-space: pre-line; overflow: visible; position: relative; }
+.gs thead th, .gs tbody th { background: #f8f9fa; color: #5f6368; font-weight: 400; text-align: center; font-size: 11px; }
+.gs tbody th { width: 34px; }
+.gs .hdr td { background: #eef3fb; font-weight: 700; text-align: center; }
+.gs .c { text-align: center; }
+.gs .mask { color: #9aa0a6; letter-spacing: 1px; }
+.gs .capt { color: #e61919; font-weight: 700; }
+.gs .note::after { content: ""; position: absolute; top: 0; right: 0; border-style: solid; border-width: 0 7px 7px 0; border-color: transparent #000 transparent transparent; }
+.gs .sel { outline: 2px solid #1a73e8; outline-offset: -2px; }
+.gs .o1 { color: #202124; font-size: 10.5px; }
+.gs .memo { position: absolute; z-index: 3; left: calc(100% + 6px); top: -2px; width: 250px; background: #fffbd6; border: 1px solid #e6dc8c; box-shadow: 0 2px 6px rgba(0,0,0,.2); padding: 6px 8px; font-weight: 400; color: #202124; white-space: pre-line; font-size: 10.5px; }
+.gs-tabs { display: flex; gap: 2px; padding: 0 12px; background: #f1f3f4; border-top: 1px solid #e3e3e3; font-size: 12px; }
+.gs-tabs span { padding: 7px 14px; color: #5f6368; }
+.gs-tabs span.on { background: #fff; color: #188038; font-weight: 700; border-bottom: 3px solid #188038; }
+.gs .n { top: -10px; left: -10px; }
+.gs-caption { font-size: 13px; color: var(--muted); margin: 8px 2px 0; }
+
+/* 번호 설명 목록 */
+.keys { list-style: none; margin: 20px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+.keys li { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; grid-template-columns: 26px 1fr; gap: 12px; max-width: none; }
+.keys .k { width: 24px; height: 24px; border-radius: 50%; background: var(--ink); color: var(--paper); font-size: 12px; font-weight: 700; display: grid; place-items: center; margin-top: 2px; }
+.keys b { display: block; }
+.keys p { margin: 2px 0 0; color: var(--muted); font-size: 15px; }
+
+table.ref { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; font-size: 15px; }
+table.ref th, table.ref td { text-align: left; vertical-align: top; padding: 10px 14px; border-top: 1px solid var(--line); }
+table.ref thead th { border-top: 0; background: var(--paper); color: var(--muted); font-weight: 600; font-size: 13px; }
+table.ref td:first-child { white-space: nowrap; }
+.tablewrap { overflow-x: auto; }
+.pill { display: inline-block; font-size: 13px; font-weight: 700; padding: 2px 9px; border-radius: 4px; white-space: nowrap; }
+.pill.red { background: #e74c3c; color: #fff; }
+.pill.redtxt { color: var(--bad); border: 1px solid var(--bad); }
+.pill.green { color: var(--ok); border: 1px solid var(--ok); }
+.pill.orange { color: var(--warn); border: 1px solid var(--warn); }
+.pill.orangebg { background: #e67e22; color: #fff; }
+.pill.plain { color: var(--muted); border: 1px solid var(--line); }
+
+details { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 0 18px; }
+details + details { margin-top: 10px; }
+summary { cursor: pointer; font-weight: 600; padding: 14px 0; list-style-position: outside; }
+details[open] summary { border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+details > *:last-child { margin-bottom: 16px; }
+
+footer { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); padding-top: 20px; }
+
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: 1fr; gap: 24px; padding: 20px 16px 60px; }
+  nav.toc { position: static; }
+  nav.toc ol { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  header.top h1 { font-size: 27px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="toc" aria-label="목차">
+    <span class="ver">v1.54 기준 · 2026-11</span>
+    <ol>
+      <li><a href="#start">처음 켜기</a></li>
+      <li><a href="#screen">화면 구성</a></li>
+      <li><a href="#daily">매일 확인할 것</a></li>
+      <li><a href="#howto">자주 하는 작업</a></li>
+      <li><a href="#alerts">경고가 떴을 때</a></li>
+      <li><a href="#legend">표시 읽는 법</a></li>
+      <li><a href="#files">글·이미지 파일 준비</a></li>
+      <li><a href="#sheet">구글 시트 칸 안내</a></li>
+      <li><a href="#writes">시트에 기록되는 내용</a></li>
+      <li><a href="#auto">알아서 하는 일</a></li>
+      <li><a href="#faq">자주 묻는 질문</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header class="top">
+      <h1>네이버 카페 자동 포스팅 사용 설명서</h1>
+      <p>구글 시트에 적힌 일정대로 카페 글을 자동으로 올리는 프로그램입니다. 이 문서는 대시보드(프로그램 화면)를 기준으로, 처음 쓰는 분도 따라 할 수 있게 정리했습니다.</p>
+    </header>
+
+    <!-- 1 -->
+    <section id="start">
+      <h2>처음 켜기</h2>
+      <p class="lead">실행 파일만 켜면 업데이트, 시트 불러오기, 예약 모드 켜기까지 자동으로 진행됩니다.</p>
+      <div class="stack">
+        <div class="card">
+          <ol class="steps">
+            <li><div><b><span class="mono">NaverCafeAuto.exe</span>를 실행합니다.</b><br>새 버전이 있으면 묻지 않고 받아서 다시 켜집니다. 잠시 기다리면 됩니다.</div></li>
+            <li><div><b>작업 목록이 자동으로 불러와집니다.</b><br>로그 창에 <span class="mono">대기중: N개, 예약됨: N개, 완료됨: N개 불러오기 완료</span>가 보이면 준비가 끝난 것입니다.</div></li>
+            <li><div><b>예약 모드가 자동으로 <span class="ui">ON</span>(초록)이 됩니다.</b><br>이 상태로 켜 두면 1분마다 시트를 확인해서 예약 시각이 된 글을 올립니다.</div></li>
+          </ol>
+        </div>
+        <div class="callout bad">
+          <strong>예약 모드는 PC 한 대에서만 켜 두세요</strong>
+          <p>두 대 이상에서 ON이면 같은 아이디 브라우저가 서로 충돌하거나 글이 겹쳐 올라갈 수 있습니다. 업로드 담당 PC가 아니라면 <span class="ui">OFF</span>를 누르세요. <span class="ui">시트 불러오기</span>를 누를 때마다 다시 ON으로 바뀌므로, 불러온 뒤에는 OFF를 다시 눌러야 합니다.</p>
+        </div>
+        <div class="callout">
+          <strong>프로그램이 켜져 있어야 올라갑니다</strong>
+          <p>업로드 PC는 절전 모드로 들어가지 않게 해 주세요. 꺼져 있는 동안 지나간 예약은 다음에 켰을 때 바로 올라갑니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section id="screen">
+      <h2>화면 구성</h2>
+      <p class="lead">아래 그림의 번호와 설명 번호가 같습니다. 그림 속 데이터는 예시입니다.</p>
+
+      <div class="shot" role="img" aria-label="대시보드 화면 모형">
+        <div class="titlebar"><span>네이버 카페 자동 포스팅 (Naver Cafe Auto) v1.54</span><span>— ☐ ✕</span></div>
+        <div class="shot-scroll"><div class="shot-inner">
+          <div class="row">
+            <div class="b load"><span class="n">1</span>시트 불러오기 (Load)</div>
+            <div class="b start"><span class="n">2</span>작업 시작 (Start Ready)</div>
+            <div class="b mode"><span class="n">3</span>예약 모드 <i class="on">ON</i><i class="off">OFF</i></div>
+            <div class="b cancel"><span class="n">4</span>예약 취소 (Cancel)</div>
+            <div class="b cal"><span class="n">5</span>📅 일정 달력 (Calendar)</div>
+          </div>
+          <div class="pre"><span class="n">6</span>
+            <b style="margin-left:16px">🔑 사전 로그인 (수동 브라우저 열기):</b> 아이디:
+            <span class="combo">[12] 김민지 (minji_cafe)</span> 포트: <span class="port">9234</span>
+            <span class="open">브라우저 열기</span>
+          </div>
+          <div class="panes">
+            <div class="pane" style="gap:8px">
+              <div class="pane" style="position:relative">
+                <span class="n">7</span>
+                <div class="pane-h"><span style="color:#409eff;margin-left:16px">⏳ 대기중인 작업 (Ready)</span><span class="chk">☐ 전체선택</span>
+                  <span class="err">⚠ 🔒 캡챠-수동로그인 필요 (1명): <u>정우철(대현)</u> &nbsp; 2차 에러 (1)</span>
+                  <span class="lgn">🔑 정우철(대현) 로그인하러 가기</span></div>
+                <div class="tbl">
+                  <div><span>선택</span><span>번호</span><span>이름</span><span>카페명</span><span>업로드</span><span>다음예약</span></div>
+                  <div><span>☐</span><span>150</span><span class="redtxt">🔒 정우철(대현)</span><span>리뷰카페</span><span>2주,1달,3달</span><span class="red">🔒 캡챠-수동로그인 필요 (11-10 14:05)</span></div>
+                  <div><span>☐</span><span>88</span><span>박서연</span><span>후기모음</span><span>1주,2주</span><span class="redtxt">에러(11-10 11:20): 게시판 '후기' 진입 실패…</span></div>
+                  <div><span>☐</span><span>201</span><span>이하늘</span><span>리뷰카페</span><span class="fileless">2주 (2주 없음!)</span><span></span></div>
+                </div>
+              </div>
+              <div class="pane">
+                <span class="n">8</span>
+                <div class="pane-h"><span style="color:#67c23a;margin-left:16px">📅 예약된 작업 (Reserved)</span><span class="chk">☐ 전체선택</span></div>
+                <div class="tbl">
+                  <div><span>선택</span><span>번호</span><span>이름</span><span>카페명</span><span>업로드</span><span>다음예약</span></div>
+                  <div><span>☐</span><span>12</span><span>김민지</span><span>리뷰카페</span><span>1달</span><span class="green">[예약됨] 2026-11-12 15:40</span></div>
+                  <div><span>☐</span><span>47</span><span>최유나</span><span>후기모음</span><span>2주</span><span class="green">[예약됨] 2026-11-13 10:12</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="pane" style="gap:8px">
+              <div class="pane">
+                <span class="n">9</span>
+                <div class="pane-h"><span style="margin-left:16px">📝 작업 로그 (Logs)</span></div>
+                <div class="log">-&gt; 실행 대상 발견: 김민지 (2026-11-11 15:40)<br>=== 작업 시작: 리뷰카페 - 후기게시판 ===<br>[김민지] 단계: 2 (1달)<br>성공: https://cafe.naver.com/…<br>대기중: 3개, 예약됨: 41개, 완료됨: 18개</div>
+              </div>
+              <div class="pane">
+                <span class="n">10</span>
+                <div class="pane-h"><span style="color:#606266;margin-left:16px">✅ 완료된 작업</span><span class="chk">☐ 전체선택</span></div>
+                <div class="tbl comp">
+                  <div><span>선택</span><span>이름</span><span>마지막업로드</span><span>리셋까지</span></div>
+                  <div><span>☐</span><span>한도윤</span><span>2026-08-14</span><span class="redtxt">리셋 대기</span></div>
+                  <div><span>☐</span><span>오지수</span><span>2026-08-19</span><span class="orange">D-6 (11-17)</span></div>
+                </div>
+                <div class="resetbtn">선택한 작업 리셋 (Reset Task)</div>
+              </div>
+            </div>
+          </div>
+          <div class="sheetlink"><span class="n" style="left:calc(50% - 150px);top:2px">11</span>카페세팅 바로가기 (Google Sheet)</div>
+        </div></div>
+      </div>
+
+      <ul class="keys">
+        <li><span class="k">1</span><div><b>시트 불러오기</b><p>구글 시트를 다시 읽어 표를 새로 고칩니다. 시트를 직접 고친 뒤에는 꼭 누르세요.</p></div></li>
+        <li><span class="k">2</span><div><b>작업 시작</b><p>대기중·예약된 표에서 체크한 작업을 예약 시각과 상관없이 지금 바로 올립니다.</p></div></li>
+        <li><span class="k">3</span><div><b>예약 모드 ON / OFF</b><p>ON이면 1분마다 예약을 확인해 자동 업로드하고, 하루 전 사전 로그인도 해 둡니다.</p></div></li>
+        <li><span class="k">4</span><div><b>예약 취소</b><p>체크한 작업의 예약 날짜를 지우고 대기중 표로 옮깁니다.</p></div></li>
+        <li><span class="k">5</span><div><b>일정 달력</b><p>날짜별 예약 건수를 보여줍니다. 날짜에 마우스를 올리면 이름·카페·주기가 나옵니다.</p></div></li>
+        <li><span class="k">6</span><div><b>사전 로그인</b><p>아이디를 고르고 <span class="ui">브라우저 열기</span>를 누르면 그 아이디 전용 크롬이 열립니다. 아이디/비밀번호가 미리 입력돼 있어 로그인 버튼만 누르면 됩니다. 포트는 자동으로 정해지니 바꾸지 마세요.</p></div></li>
+        <li><span class="k">7</span><div><b>대기중인 작업</b><p>예약이 없거나, 예약 시각이 지났거나, 에러가 난 작업입니다. 제목 옆 빨간 글씨와 <span class="ui">로그인하러 가기</span> 버튼은 문제가 있을 때만 보입니다.</p></div></li>
+        <li><span class="k">8</span><div><b>예약된 작업</b><p>앞으로 올라갈 작업입니다. 캡챠 문제가 있는 작업이 맨 위, 그다음 가까운 시각 순으로 정렬됩니다.</p></div></li>
+        <li><span class="k">9</span><div><b>작업 로그</b><p>지금 무엇을 하고 있는지 실시간으로 나옵니다. 문제가 생기면 여기부터 확인하세요.</p></div></li>
+        <li><span class="k">10</span><div><b>완료된 작업 · 리셋</b><p>모든 차수를 다 올린 작업입니다. 체크 후 <span class="ui">선택한 작업 리셋</span>을 누르면 처음부터 다시 시작할 수 있습니다.</p></div></li>
+        <li><span class="k">11</span><div><b>카페세팅 바로가기</b><p>작업 목록이 있는 구글 시트를 엽니다.</p></div></li>
+      </ul>
+
+      <div class="card" style="margin-top:16px">
+        <h3>표의 칸</h3>
+        <p style="margin:0">선택 · 번호(시트 A열) · 이름 · 아이디 · 포트 · 카페명 · 게시판 · <b>업로드</b> · <b>다음예약</b>. <b>업로드</b> 칸은 대기중 표에서는 전체 주기(예: <span class="mono">2주,1달,3달</span>), 예약된 표에서는 이번에 올릴 차수의 주기(예: <span class="mono">1달</span>)를 보여줍니다. 칸 제목을 누르면 그 기준으로 정렬되고, 예약이 있는 줄을 우클릭하면 <span class="ui">예약 취소</span> 메뉴가 나옵니다.</p>
+      </div>
+    </section>
+
+    <!-- 3 -->
+    <section id="daily">
+      <h2>매일 확인할 것</h2>
+      <p class="lead">업로드 담당자는 하루 한두 번 아래 세 가지만 보면 됩니다.</p>
+      <div class="grid2">
+        <div class="card"><h3>예약 모드가 초록 ON인가</h3><p style="margin:0">OFF(빨강)이면 아무것도 올라가지 않습니다.</p></div>
+        <div class="card"><h3>대기중 표 위에 빨간 글씨가 있나</h3><p style="margin:0"><span class="mono">🔒 캡챠</span>나 <span class="mono">⚠ N차 에러</span>가 보이면 <a href="#alerts">경고 대처법</a>대로 처리합니다.</p></div>
+        <div class="card"><h3>업로드 칸이 빨간 배경인가</h3><p style="margin:0">글 파일이 없다는 뜻입니다. <a href="#files">파일 준비</a>를 확인하세요.</p></div>
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section id="howto">
+      <h2>자주 하는 작업</h2>
+      <p class="lead">대부분 대시보드에서 끝납니다. 시트를 직접 고쳤다면 마지막에 <span class="ui">시트 불러오기</span>를 누르세요.</p>
+      <div class="stack">
+        <div class="card">
+          <h3>새 작업 예약하기</h3>
+          <ol class="steps">
+            <li><div>구글 시트에 한 줄을 추가합니다. 이름, 아이디, 비밀번호, 카페명, 게시판, 업로드 주기, 파일 위치를 채웁니다. (<a href="#sheet">칸 안내</a>)</div></li>
+            <li><div><span class="ui">시트 불러오기</span>를 누르면 <b>대기중인 작업</b> 표에 나타납니다.</div></li>
+            <li><div>그 줄의 <b>다음예약</b> 칸을 <b>더블클릭</b>합니다.</div></li>
+            <li><div>달력에서 첫 글을 올릴 날짜와 시간을 고릅니다. 달력에 날짜별 예약 건수가 보이니 붐비는 날은 피하세요.</div></li>
+            <li><div><span class="ui">설정 완료 (OK)</span>를 누르면 1차 시각이 시트에 적히고, 2~4차는 주기에 맞춰 자동으로 계산됩니다(오전 10시~오후 8시 사이 임의 시각). 작업은 <b>예약된 작업</b> 표로 옮겨집니다.</div></li>
+          </ol>
+        </div>
+        <div class="grid2">
+          <div class="card">
+            <h3>예약 시간 바꾸기</h3>
+            <p style="margin:0">예약된 표에서 <b>다음예약</b> 칸을 더블클릭해 새 시간을 고릅니다. 이번 차수 이후의 일정도 새 시간을 기준으로 다시 계산됩니다.</p>
+          </div>
+          <div class="card">
+            <h3>지금 바로 올리기</h3>
+            <p style="margin:0">대기중 또는 예약된 표에서 체크하고 <span class="ui">작업 시작</span>을 누릅니다. 진행 상황은 로그 창에 나옵니다.</p>
+          </div>
+          <div class="card">
+            <h3>예약 취소</h3>
+            <p style="margin:0">여러 개는 체크 후 <span class="ui">예약 취소</span> 버튼, 하나는 그 줄을 우클릭해 <span class="ui">예약 취소</span>. 날짜가 지워지고 대기중으로 이동합니다.</p>
+          </div>
+          <div class="card">
+            <h3>끝난 작업 다시 시작</h3>
+            <p style="margin:0">완료된 표에서 체크 → <span class="ui">선택한 작업 리셋</span>. 1~4차 일정이 비워지고 대기중으로 돌아가면, 새 작업처럼 다음예약을 더블클릭해 1차를 잡습니다. 따로 하지 않아도 마지막 업로드 90일 뒤에는 자동으로 리셋·재예약됩니다.</p>
+          </div>
+          <div class="card">
+            <h3>미리 로그인해 두기</h3>
+            <p style="margin:0">⑥ 사전 로그인에서 아이디를 고르고 <span class="ui">브라우저 열기</span> → <b>로그인 상태 유지</b>가 체크된 채로 로그인 버튼을 누릅니다. 로그인 후 창은 닫아도 됩니다.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5 -->
+    <section id="alerts">
+      <h2>경고가 떴을 때</h2>
+      <p class="lead">경고는 대기중 표 제목 옆에 빨간 글씨로 나옵니다. 빨간 글씨에 마우스를 올리면 행 번호·이름·카페·에러 내용이 전부 보입니다.</p>
+      <div class="stack">
+        <div class="card" style="border-left:4px solid var(--bad)">
+          <h3>🔒 캡챠-수동로그인 필요</h3>
+          <p>네이버가 자동 로그인을 막으려고 글자 입력(캡챠)을 띄운 상태입니다. 사람이 한 번 직접 로그인해 주면 풀립니다. 같은 아이디는 팝업도 하나만 뜹니다.</p>
+          <ol class="steps">
+            <li><div>제목 옆 빨간 버튼 <span class="ui">🔑 정우철(대현) 로그인하러 가기</span>를 누릅니다. 여러 명이면 목록에서 고릅니다. (이름 글씨를 누르면 표에서 그 줄로 이동합니다.)</div></li>
+            <li><div>열린 크롬 창에 아이디·비밀번호가 이미 들어가 있습니다. 캡챠 글자를 입력하고 <b>로그인</b> 버튼을 누릅니다.</div></li>
+            <li><div>끝입니다. 프로그램이 로그인을 알아채고 빨간 표시와 시트 에러를 자동으로 지웁니다(최대 60분까지 지켜봅니다). 업로드 중에 막혔던 일정은 원래 예약 시각으로 되돌아가며, 그 시각이 이미 지났다면 1분 안에 바로 올라갑니다.</div></li>
+          </ol>
+          <div class="callout" style="margin-top:14px"><p>로그인을 마치기 전에 크롬 창을 닫지 마세요. 캡챠 실패 목록은 시트 O1 칸에도 적혀 담당자에게 메일로 알림이 갑니다.</p><p style="margin-top:6px">캡챠가 뜬 아이디는 계정 보호조치를 막으려고 프로그램이 스스로 다시 로그인하지 않습니다. <b>직접 로그인해 주기 전까지는 업로드도 되지 않으니</b> 경고가 보이면 되도록 빨리 처리해 주세요.</p></div>
+        </div>
+
+        <div class="card" style="border-left:4px solid #e67e22">
+          <h3>⬆ 등업 필요 (1건): 수성97(카페명)</h3>
+          <p>그 카페에서 아이디의 등급이 모자라 게시판에 들어가지 못한 작업입니다. 등급은 다시 해도 바뀌지 않으므로 재시도 없이 바로 멈춥니다. 대기중 표의 다음예약 칸에는 주황 배경으로 <span class="pill orangebg">⬆ 등업 필요: 중급 발품사전 (현재 새싹 발품)</span>처럼 필요한 등급이 나오고, 마우스를 올리면 네이버 안내 문구 전체가 보입니다.</p>
+          <ol class="steps">
+            <li><div>그 카페의 등업 조건(게시글·댓글 수, 방문 수, 가입 기간 등)을 채워 필요한 등급으로 올립니다. 조건은 카페의 등급 안내에 나옵니다.</div></li>
+            <li><div>등업이 되면 <b>다음예약 칸을 더블클릭해 새 시간을 잡습니다</b>. 그때부터 다시 올라갑니다.</div></li>
+          </ol>
+        </div>
+
+        <div class="card" style="border-left:4px solid var(--bad)">
+          <h3>⚠ 1차 에러 (1) &nbsp;2차 에러 (4) …</h3>
+          <p>같은 작업이 세 번(첫 실패 → 10분 뒤 → 30분 뒤) 실패해서 시트의 일정 칸에 <span class="mono">에러(시각): 사유</span>가 적힌 건수입니다. 해당 줄의 다음예약 칸에도 빨간 글씨로 사유가 나옵니다. 원인을 고친 뒤 <b>다음예약 칸을 더블클릭해 새 시간을 잡으면</b> 다시 예약됩니다.</p>
+          <div class="tablewrap">
+            <table class="ref">
+              <thead><tr><th>에러 내용에 이런 말이 있으면</th><th>확인할 것</th></tr></thead>
+              <tbody>
+                <tr><td>로그인 불가</td><td>시트의 아이디·비밀번호가 맞는지, 계정에 보호조치가 걸렸는지. 사전 로그인으로 직접 로그인해 보세요.</td></tr>
+                <tr><td>URL을 찾지 못했습니다</td><td>시트의 카페명이 카페 정보 시트에 등록된 이름과 똑같은지.</td></tr>
+                <tr><td>카페 접속 실패</td><td>카페 주소가 바뀌었거나 가입·탈퇴 상태인지.</td></tr>
+                <tr><td>등급 부족: …</td><td>네이버 안내 문구가 그대로 적힙니다(예: <span class="mono">중급 발품사전 등급이 되시면 읽기가 가능한 게시판 입니다. (현재 등급: 새싹 발품)</span>). 위의 <b>⬆ 등업 필요</b>를 보세요.</td></tr>
+                <tr><td>게시판 … 진입 실패</td><td>게시판 이름이 카페 메뉴 이름과 띄어쓰기까지 똑같은지, 글쓰기 권한(등급)이 있는지.</td></tr>
+                <tr><td>글쓰기 오류 (…)</td><td>괄호 안에 실제 이유가 적힙니다.<br>· <span class="mono">글쓰기 버튼이 없음</span>: 그 게시판에 글쓰기 권한(등급)이 있는지<br>· <span class="mono">등록을 눌렀지만 글이 올라가지 않음 - 화면 메시지: …</span>: 메시지에 적힌 네이버 안내(작성 한도·제한 등)를 확인<br>· <span class="mono">글쓰기 화면(제목 입력란)이 열리지 않음 - …</span>: 뒤에 적힌 이유를 확인<br>&nbsp;&nbsp;- <span class="mono">알림창: …</span>: 네이버가 띄운 안내(글쓰기 권한·등급·하루 글 수 제한 등)를 확인<br>&nbsp;&nbsp;- <span class="mono">로그인 화면으로 이동됨</span>: 로그인이 풀린 것이니 <span class="ui">수동 브라우저 열기</span>로 다시 로그인<br>&nbsp;&nbsp;- <span class="mono">게시판 목록에 머무름</span> / <span class="mono">에디터 미표시</span>: 대부분 일시적인 문제(네이버 지연)<br>· <span class="mono">클립보드 사용 불가</span>: 프로그램이 도는 PC에서 원격접속·복사 프로그램이 클립보드를 잡고 있었는지<br>그 외엔 대부분 일시적인 문제라 다시 예약하거나 <span class="ui">작업 시작</span>으로 올려 보세요. 실패 화면은 그 PC의 <span class="mono">C:\Users\(사용자)\navercafe_auto_data\error_screenshots</span>에 사진으로 저장됩니다.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card" style="border-left:4px solid var(--warn)">
+          <h3>업로드 칸이 빨간 배경: <span class="mono">(2주 없음!)</span> · <span class="mono">(파일없음!)</span></h3>
+          <p style="margin:0">파일 위치(I열) 폴더에 그 차수 글 파일이 없습니다. 폴더에 파일을 넣고 <span class="ui">시트 불러오기</span>를 누르면 사라집니다. 이름 규칙은 <a href="#files">글·이미지 파일 준비</a>를 보세요.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6 -->
+    <section id="legend">
+      <h2>표시 읽는 법</h2>
+      <p class="lead">색만 봐도 상태를 알 수 있게 되어 있습니다.</p>
+      <div class="tablewrap">
+        <table class="ref">
+          <thead><tr><th>보이는 모양</th><th>위치</th><th>뜻</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pill green">[예약됨] 2026-11-12 15:40</span></td><td>다음예약</td><td>정상 예약. 그 시각에 자동으로 올라갑니다.</td></tr>
+            <tr><td><span class="pill red">🔒 캡챠-수동로그인 필요</span></td><td>다음예약 · 이름</td><td>직접 로그인이 필요합니다. 마우스를 올리면 자세한 내용이 나옵니다.</td></tr>
+            <tr><td><span class="pill orangebg">⬆ 등업 필요: 중급 발품사전 (현재 새싹 발품)</span></td><td>다음예약</td><td>카페 등급이 모자라 못 올린 작업. 등업 후 다시 예약하세요.</td></tr>
+            <tr><td><span class="pill redtxt">에러(11-10 11:20): …</span></td><td>다음예약</td><td>3회 실패해 멈춘 작업. 원인 해결 후 다시 예약하세요.</td></tr>
+            <tr><td><span class="pill red">2주 (2주 없음!)</span></td><td>업로드</td><td>그 차수 글 파일이 폴더에 없습니다.</td></tr>
+            <tr><td><span class="pill orange">D-6 (11-17)</span></td><td>리셋까지</td><td>7일 안에 자동 리셋되어 1차부터 다시 예약됩니다.</td></tr>
+            <tr><td><span class="pill redtxt">리셋 대기</span></td><td>리셋까지</td><td>90일이 지나 곧 자동 리셋됩니다.</td></tr>
+            <tr><td><span class="pill plain">-</span></td><td>리셋까지</td><td>자동 리셋 대상이 아닙니다(남은 업로드 수가 0이 아님 등).</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 7 -->
+    <section id="files">
+      <h2>글·이미지 파일 준비</h2>
+      <p class="lead">시트 I열(파일 위치)에 적은 폴더에서 차수별 글과 이미지를 찾습니다. 파일 이름에 <b>주기 이름</b>(예: <span class="mono">2주</span>, <span class="mono">1달</span>) 또는 <b>차수 번호</b>(예: <span class="mono">[1]</span>, <span class="mono">[2]</span>)를 넣어 구분합니다.</p>
+      <div class="grid2">
+        <div class="card">
+          <h3>제목 · 본문 (.txt)</h3>
+          <p>첫 줄이 <b>제목</b>, 둘째 줄부터 <b>본문</b>입니다.</p>
+          <p class="mono" style="margin:0">2주.txt<br>1달.txt<br>[3]3달 후기.txt</p>
+        </div>
+        <div class="card">
+          <h3>이미지 (.jpg .png .gif)</h3>
+          <p>이름에 <b>전</b> 또는 <b>후</b>를 넣습니다. 다른 주기 이름이 들어간 파일은 그 차수에만 쓰입니다.</p>
+          <p class="mono" style="margin:0">전_01.jpg<br>[2]후_01.jpg<br>1달_후_02.png</p>
+        </div>
+        <div class="card">
+          <h3>앞·뒤 문구 (.txt)</h3>
+          <p>본문 앞뒤에 붙일 고정 문구는 이름에 <b>전문구</b>, <b>후문구</b>를 넣습니다.</p>
+          <p class="mono" style="margin:0">전문구.txt<br>후문구.txt</p>
+        </div>
+      </div>
+      <div class="callout bad" style="margin-top:16px">
+        <strong>첫 글(1차)과 2주 차수를 올릴 때는 기존 글이 지워집니다</strong>
+        <p>그 카페에서 그 아이디로 쓴 글을 전부 삭제한 뒤 새로 올립니다. 남겨야 할 글이 있는 아이디라면 미리 담당자와 상의하세요.</p>
+      </div>
+    </section>
+
+    <!-- 8 -->
+    <section id="sheet">
+      <h2>구글 시트 칸 안내</h2>
+      <p class="lead">프로그램은 첫 줄의 칸 제목으로 위치를 찾습니다. <b>칸 제목은 바꾸지 마세요.</b> 아래는 기본 배치입니다.</p>
+      <div class="tablewrap">
+        <table class="ref">
+          <thead><tr><th>칸</th><th>내용</th><th>누가 적나</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">A</td><td>번호(No). 대시보드 번호 칸과 사전 로그인 목록 순서에 쓰입니다.</td><td>직원</td></tr>
+            <tr><td class="mono">B · C · D</td><td>이름 · 네이버 아이디 · 비밀번호</td><td>직원</td></tr>
+            <tr><td class="mono">E · F</td><td>카페명 · 게시판 이름 (카페 메뉴 이름과 똑같이)</td><td>직원</td></tr>
+            <tr><td class="mono">G</td><td>업로드 주기. 쉼표로 차수를 나눕니다. 예: <span class="mono">2주,1달,3달</span> (최대 4차)</td><td>직원</td></tr>
+            <tr><td class="mono">I</td><td>글·이미지 파일이 있는 폴더 경로</td><td>직원</td></tr>
+            <tr><td class="mono">J ~ M</td><td>1~4차 일정. 예약 시각 → 올리면 <span class="mono">완료</span> 기록, 실패하면 <span class="mono">에러(시각): 사유</span></td><td>대시보드 · 프로그램</td></tr>
+            <tr><td class="mono">N</td><td>남은 업로드 수. <span class="mono">0</span>이면 완료된 작업으로 분류 (프로그램은 읽기만 합니다)</td><td>시트</td></tr>
+            <tr><td class="mono">O</td><td>포트 번호 (아이디별 자동)</td><td>프로그램</td></tr>
+            <tr><td class="mono">O1 칸</td><td>캡챠 실패 목록. 메일 알림이 이 칸을 봅니다.</td><td>프로그램</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:14px;color:var(--muted)">일정(J~M)은 시트에서 직접 고치기보다 대시보드에서 더블클릭으로 잡는 것이 안전합니다. 다음 차수까지 함께 계산되기 때문입니다.</p>
+    </section>
+
+    <!-- 8-2 -->
+    <section id="writes">
+      <h2>시트에 기록되는 내용</h2>
+      <p class="lead">프로그램은 <b>카페작업리스트</b>(작업 목록, 2행이 칸 제목·3행부터 작업)와 <b>작업로그</b> 시트에 결과를 적습니다. <b>게시판</b> 시트(카페 주소)는 읽기만 합니다. 시트만 봐도 무슨 일이 있었는지 알 수 있게 아래 모양으로 남습니다.</p>
+      <div class="stack">
+        <div>
+          <div class="gs" role="img" aria-label="카페작업리스트 시트 모형">
+            <div class="gs-top"><span class="logo"></span><span class="doc">카페세팅 (Google Sheet)</span></div>
+            <div class="gs-fx"><span class="ref">J6</span><span class="f"><i>fx</i>2026-11-12 10:30</span></div>
+            <div class="gs-scroll">
+              <table style="width:1490px">
+                <colgroup><col style="width:34px"><col style="width:40px"><col style="width:90px"><col style="width:76px"><col style="width:52px"><col style="width:68px"><col style="width:70px"><col style="width:82px"><col style="width:40px"><col style="width:120px"><col style="width:190px"><col style="width:190px"><col style="width:150px"><col style="width:110px"><col style="width:44px"><col style="width:134px"></colgroup>
+                <thead><tr><th></th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th><th>F</th><th>G</th><th>H</th><th>I</th><th>J</th><th>K</th><th>L</th><th>M</th><th>N</th><th>O</th></tr></thead>
+                <tbody>
+                  <tr><th>1</th><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="o1"><span class="n">7</span>캡챠 실패 (2)
+No.150 정우철(대현) 캡챠실패 (1차 업로드)
+No.61 김가연(대현) 캡챠실패 (사전 로그인 11-11 10:12)</td></tr>
+                  <tr class="hdr"><th>2</th><td>No</td><td>이름</td><td>아이디</td><td>비번</td><td>카페명</td><td>게시판</td><td>업로드</td><td>횟수</td><td>파일</td><td>1차</td><td>2차</td><td>3차</td><td>4차</td><td>남은</td><td>포트</td></tr>
+                  <tr><th>3</th><td class="c">12</td><td>김민지</td><td class="mask">mi••••</td><td class="mask">••••</td><td>리뷰카페</td><td>후기게시판</td><td>2주,1달,3달</td><td class="c">3</td><td class="mask">D:\글\…</td><td><span class="n">2</span>2026-10-01 14:22
+2주 완료</td><td>2026-10-20 15:41
+1달 완료</td><td><span class="n">1</span>2026-12-19 17:05</td><td></td><td class="c">1</td><td class="c"><span class="n">8</span>9234</td></tr>
+                  <tr><th>4</th><td class="c">88</td><td>박서연</td><td class="mask">sy••••</td><td class="mask">••••</td><td>후기모음</td><td>후기</td><td>1주,2주</td><td class="c">2</td><td class="mask">D:\글\…</td><td>2026-11-03 11:02
+1주 완료</td><td><span class="n">3</span>에러(11-10 11:20): 게시판 '후기' 진입 실패. 카페에 해당 게시판이 있는지 확인하세요.</td><td></td><td></td><td class="c">1</td><td class="c">9241</td></tr>
+                  <tr><th>5</th><td class="c">150</td><td>정우철(대현)</td><td class="mask">wc••••</td><td class="mask">••••</td><td>리뷰카페</td><td>후기게시판</td><td>2주,1달,3달</td><td class="c">3</td><td class="mask">D:\글\…</td><td><span class="n">4</span>에러(11-10 14:05): [캡챠] 자동입력 방지 때문에 로그인 불가 - 브라우저에서 수동로그인 필요 (원래 예약 2026-11-10 14:00)</td><td>2026-11-24 13:27</td><td>2026-12-08 16:50</td><td></td><td class="c">3</td><td class="c">9228</td></tr>
+                  <tr><th>6</th><td class="c">61</td><td>김가연(대현)</td><td class="mask">gy••••</td><td class="mask">••••</td><td>리뷰카페</td><td>후기게시판</td><td>2주,1달</td><td class="c">2</td><td class="mask">D:\글\…</td><td class="capt note sel"><span class="n">5</span>2026-11-12 10:30<span class="memo">⚠ [캡챠] 수동로그인 필요
+사전 로그인(11-11 10:12) 중 자동입력 방지가 떠서 자동 로그인 불가.
+업로드 예정(2026-11-12 10:30) 전에 '사전 로그인 → 브라우저 열기'로 직접 로그인해주세요.</span></td><td>2026-11-26 18:14</td><td></td><td></td><td class="c">2</td><td class="c">9230</td></tr>
+                  <tr><th>7</th><td class="c">23</td><td>한도윤</td><td class="mask">dy••••</td><td class="mask">••••</td><td>후기모음</td><td>후기</td><td>1주,2주</td><td class="c">2</td><td class="mask">D:\글\…</td><td>2026-08-07 10:40
+1주 완료</td><td>2026-08-14 12:03
+2주 완료</td><td></td><td></td><td class="c"><span class="n">6</span>0</td><td class="c">9236</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="gs-tabs"><span class="on">카페작업리스트</span><span>게시판</span><span>작업로그</span></div>
+          </div>
+          <p class="gs-caption">예시 화면입니다. 이름·아이디·비밀번호·경로는 가상의 값이고 일부를 가렸습니다.</p>
+        </div>
+
+        <ul class="keys" style="margin-top:0">
+          <li><span class="k">1</span><div><b>예약 시각</b><p>대시보드에서 예약을 잡거나 앞 차수를 올리면 자동으로 채워집니다. 이 시각이 되면 올라갑니다.</p></div></li>
+          <li><span class="k">2</span><div><b>완료 기록</b><p>올린 시각과 <span class="mono">주기 완료</span>가 두 줄로 적힙니다. 이 글자로 몇 차까지 올렸는지 판단하니 지우지 마세요.</p></div></li>
+          <li><span class="k">3</span><div><b>에러</b><p>3번 연달아 실패하면 시각과 사유가 적히고 담당자에게 에러 메일이 갑니다. 원인을 고친 뒤 대시보드에서 다시 예약하세요.</p></div></li>
+          <li><span class="k">4</span><div><b>업로드 중 캡챠</b><p>원래 예약 시각을 괄호에 같이 적어 둡니다. 직접 로그인하면 그 시각으로 저절로 되돌아갑니다.</p></div></li>
+          <li><span class="k">5</span><div><b>미리 로그인 중 캡챠</b><p>예약 시각은 그대로 두고 빨간 굵은 글씨로 바꾼 뒤 메모를 답니다. 칸 오른쪽 위 검은 삼각형에 마우스를 올리면 메모가 보입니다.</p></div></li>
+          <li><span class="k">6</span><div><b>남은 업로드 수</b><p><span class="mono">0</span>이 되면 완료된 작업으로 분류되고, 마지막 업로드 90일 뒤 자동 리셋됩니다.</p></div></li>
+          <li><span class="k">7</span><div><b>O1 캡챠 목록</b><p>캡챠로 막힌 사람이 한눈에 보이고, 새로 생기면 캡챠 메일이 갑니다. 모두 해결되면 <span class="mono">캡챠 실패 (0)</span>.</p></div></li>
+          <li><span class="k">8</span><div><b>포트</b><p>아이디별 크롬 창 번호입니다. 시트를 불러올 때마다 자동으로 적힙니다.</p></div></li>
+        </ul>
+
+        <div>
+          <div class="gs" role="img" aria-label="작업로그 시트 모형">
+            <div class="gs-scroll">
+              <table style="width:1000px">
+                <colgroup><col style="width:34px"><col style="width:30px"><col style="width:90px"><col style="width:80px"><col style="width:90px"><col style="width:90px"><col style="width:60px"><col style="width:340px"><col style="width:150px"></colgroup>
+                <thead><tr><th></th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th><th>F</th><th>G</th><th>H</th></tr></thead>
+                <tbody>
+                  <tr class="hdr"><th>2</th><td></td><td>이름</td><td>아이디</td><td>카페명</td><td>게시판</td><td>남은</td><td>URL</td><td>날짜</td></tr>
+                  <tr><th>3</th><td></td><td>박서연</td><td class="mask">sy••••</td><td>후기모음</td><td>후기</td><td class="c">1</td><td>https://cafe.naver.com/…/48213</td><td>2026-11-03 11:02:37</td></tr>
+                  <tr><th>4</th><td></td><td>김민지</td><td class="mask">mi••••</td><td>리뷰카페</td><td>후기게시판</td><td class="c">1</td><td>https://cafe.naver.com/…/91577</td><td>2026-10-20 15:41:09</td></tr>
+                  <tr><th>5</th><td></td><td>이하은</td><td class="mask">ha••••</td><td>리뷰카페</td><td>후기게시판</td><td class="c">2</td><td style="color:#c5221f">실패 (1/3회): 글쓰기 오류 (글쓰기 화면(제목 입력란)이 열리지 않음 - 로그인 화면으로 이동됨 (로그인 풀림))</td><td>2026-10-18 09:30:02</td></tr>
+                  <tr><th>6</th><td></td><td>한도윤</td><td class="mask">dy••••</td><td>후기모음</td><td>후기</td><td class="c">0</td><td>https://cafe.naver.com/…/47390</td><td>2026-08-14 12:03:15</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="gs-tabs"><span>카페작업리스트</span><span>게시판</span><span class="on">작업로그</span></div>
+          </div>
+          <p class="gs-caption">작업로그 시트: 글이 올라가거나 업로드에 실패할 때마다 맨 아래에 한 줄씩 추가됩니다. 실패한 줄은 URL 칸이 <b>실패</b>로 시작하고, 업로드 완료 메일은 성공한 줄만 갑니다. 칸 제목은 예시입니다.</p>
+        </div>
+
+        <h3 style="margin:8px 0 0">자세한 기록 규칙</h3>
+        <div class="tablewrap">
+          <table class="ref">
+            <thead><tr><th>이럴 때</th><th>적히는 곳</th><th>적히는 모양 (예시)</th></tr></thead>
+            <tbody>
+              <tr><td>대시보드에서 예약을 잡으면</td><td>J~M<br>그 차수부터 끝까지</td><td><span class="mono">2026-11-12 15:40</span><br>뒤 차수는 주기에 맞춰 함께 채워집니다.</td></tr>
+              <tr><td>업로드에 성공하면</td><td>J~M 그 차수 칸</td><td><span class="mono">2026-11-12 15:41</span><br><span class="mono">1달 완료</span> (두 줄)<br>뒤 차수 일정은 실제로 올린 시각을 기준으로 다시 계산됩니다.</td></tr>
+              <tr><td>업로드에 성공하면</td><td><b>작업로그</b> 시트 새 줄 B~H</td><td>이름 · 아이디 · 카페명 · 게시판 · 남은 업로드 수 · <b>올라간 글 주소</b> · 올린 시각(<span class="mono">2026-11-12 15:41:07</span>)</td></tr>
+              <tr><td>업로드에 실패하면 (시도할 때마다)</td><td><b>작업로그</b> 시트 새 줄 B~H</td><td>G칸에 <span class="mono">실패 (1/3회): 실패 이유</span> (캡챠처럼 바로 에러 처리되면 <span class="mono">실패: 이유</span>, 등급이 모자라면 <span class="mono">실패 (등업 필요): 네이버 안내 문구</span>)<br>H칸에 업로드를 시작한 시각. 남은 업로드 수는 줄지 않습니다.</td></tr>
+              <tr><td>연달아 3번 실패하면</td><td>J~M 그 차수 칸</td><td><span class="mono">에러(11-10 11:20): 게시판 '후기' 진입 실패. 카페에 해당 게시판이 있는지 확인하세요.</span></td></tr>
+              <tr><td>업로드하다 캡챠가 뜨면</td><td>J~M 그 차수 칸</td><td><span class="mono">에러(11-10 14:05): [캡챠] 자동입력 방지 때문에 로그인 불가 - 브라우저에서 수동로그인 필요 (원래 예약 2026-11-10 14:00)</span><br>직접 로그인하면 <span class="mono">2026-11-10 14:00</span>으로 저절로 되돌아갑니다.</td></tr>
+              <tr><td>미리 로그인하다 캡챠가 뜨면</td><td>J~M 그 차수 칸</td><td>예약 시각은 그대로 두고 <b style="color:var(--bad)">빨간 굵은 글씨</b> + 메모로 표시합니다. 로그인이 확인되면 원래대로 돌아갑니다.</td></tr>
+              <tr><td>캡챠 상태가 바뀔 때마다</td><td><b>O1</b> 칸</td><td><span class="mono">캡챠 실패 (2)</span><br><span class="mono">No.150 김가연(대현) 캡챠실패 (사전 로그인 10-22 14:30)</span><br><span class="mono">No.88 박서연 캡챠실패 (2차 업로드)</span><br>모두 해결되면 <span class="mono">캡챠 실패 (0)</span></td></tr>
+              <tr><td>예약을 취소하면</td><td>J~M 그 차수 칸</td><td>비워집니다.</td></tr>
+              <tr><td>완료 작업을 리셋하면</td><td>J~M 전체</td><td>네 칸 모두 비워집니다. 90일 자동 리셋은 비운 뒤 바로 1~4차 새 일정을 채웁니다.</td></tr>
+              <tr><td>시트를 불러올 때마다</td><td>O열</td><td>아이디별 포트 번호 (예: <span class="mono">9234</span>)</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h3>메일 알림</h3>
+          <p>시트에 연결된 자동 스크립트가 위 기록을 보고 담당자에게 메일을 보냅니다. 보내는 시점은 스크립트 실행 주기에 따라 조금 늦을 수 있습니다.</p>
+          <div class="tablewrap">
+            <table class="ref">
+              <thead><tr><th>시트에 생긴 것</th><th>메일 제목 (예시)</th></tr></thead>
+              <tbody>
+                <tr><td>작업로그 새 줄</td><td><span class="mono">카페후기 김민지 리뷰카페,후기게시판 업로드 완료</span> (본문에 글 주소)</td></tr>
+                <tr><td>J~M 칸에 새 에러</td><td><span class="mono">박서연 2차 에러</span> (캡챠 에러는 제외)</td></tr>
+                <tr><td>O1에 새 캡챠 실패</td><td><span class="mono">김가연(대현) 캡챠실패 - 수동로그인 필요</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="callout bad">
+          <strong>프로그램이 적는 칸은 손으로 고치지 마세요</strong>
+          <p>J~M 칸의 <span class="mono">완료</span> 글자로 몇 차까지 올렸는지 판단합니다. 지우면 같은 차수가 다시 올라가고, 그때 기존 글이 삭제될 수 있습니다. 작업로그·O열·O1도 그대로 두세요. 일정은 대시보드에서 바꾸면 됩니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9 -->
+    <section id="auto">
+      <h2>알아서 하는 일</h2>
+      <p class="lead">예약 모드가 ON이면 아래 일은 손대지 않아도 진행됩니다.</p>
+      <div class="tablewrap">
+        <table class="ref">
+          <thead><tr><th>언제</th><th>하는 일</th></tr></thead>
+          <tbody>
+            <tr><td>1분마다</td><td>시트를 확인해 예약 시각이 지난 작업을 올립니다. 이미 올라간 차수는 다시 올리지 않습니다.</td></tr>
+            <tr><td>업로드 24시간 전</td><td>그 아이디로 미리 로그인해 둡니다(12시간마다 재확인, 업로드 30분 전부터는 건너뜀).</td></tr>
+            <tr><td>캡챠가 뜨면</td><td>네이버 보호조치를 막기 위해 아이디·비밀번호를 <b>다시 입력하지 않고</b> 대시보드·시트·메일로 알립니다. 24시간 동안은 자동 로그인을 쉬고(로그인됐는지만 30분마다 확인), 24시간 뒤 한 번만 다시 시도합니다. 그때도 캡챠가 뜨면 직접 로그인할 때까지 자동 로그인을 멈춥니다.</td></tr>
+            <tr><td>매일 새벽 3~6시</td><td>모든 아이디를 하루 한 번씩 열어 네이버·카페에 잠깐 접속해 로그인이 풀리지 않게 해 둡니다(아이디마다 30~90초 간격). 이때는 비밀번호를 입력하지 않습니다(풀려 있으면 업로드 24시간 전 미리 로그인 때 처리). 새벽에도 프로그램과 예약 모드를 켜 두세요.</td></tr>
+            <tr><td>여러 아이디 자동 로그인</td><td>한 아이디씩 2~4분 간격을 두고 로그인합니다(연달아 로그인하면 캡챠가 잘 뜸). 같은 아이디는 6시간에 한 번까지만 비밀번호를 입력합니다.</td></tr>
+            <tr><td>비밀번호 오류·추가 인증</td><td>계정 보호조치를 막기 위해 다시 입력하지 않습니다. 시트 비밀번호를 고치거나 직접 로그인하면 다시 자동 로그인합니다.</td></tr>
+            <tr><td>업로드 성공 시</td><td>일정 칸에 <span class="mono">완료</span>를 적고 남은 업로드 수를 줄입니다.</td></tr>
+            <tr><td>업로드 실패 시</td><td>예약은 유지하고 10분 뒤, 또 실패하면 30분 뒤 다시 시도합니다. 세 번째도 실패하면 일정 칸에 에러(실제 이유 포함)를 적고 멈춥니다.</td></tr>
+            <tr><td>완료 후 90일</td><td>자동 리셋 후 1차부터 다시 예약합니다. 하루 예약이 5건을 넘지 않게 날짜를 나눕니다.</td></tr>
+            <tr><td>로그인 과정</td><td>크롬의 '비밀번호 저장', 네이버의 '새 기기 등록' 창이 뜨면 자동으로 눌러 줍니다.</td></tr>
+            <tr><td>프로그램 실행 시</td><td>최신 버전으로 자동 업데이트합니다.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 10 -->
+    <section id="faq">
+      <h2>자주 묻는 질문</h2>
+      <p class="lead">현장에서 많이 나온 질문입니다.</p>
+      <div>
+        <details><summary>다른 PC에서 화면만 보고 싶어요.</summary><p>켜도 됩니다. 단, 켜자마자 예약 모드를 <span class="ui">OFF</span>로 바꾸세요. <span class="ui">시트 불러오기</span>를 누르면 다시 ON이 되니 그때마다 OFF를 눌러야 합니다.</p></details>
+        <details><summary>시트를 고쳤는데 화면이 그대로예요.</summary><p><span class="ui">시트 불러오기</span>를 누르세요. 화면은 자동으로 새로 고쳐지지 않습니다(업로드가 끝난 직후 제외).</p></details>
+        <details><summary>사전 로그인 후 크롬 창을 닫아도 되나요?</summary><p>로그인을 마쳤다면 닫아도 됩니다. 아이디마다 따로 저장된 크롬 프로필에 로그인 상태가 남습니다. 캡챠 경고로 연 창은 로그인을 끝내기 전까지 닫지 마세요.</p></details>
+        <details><summary>포트 번호는 뭔가요? 바꿔야 하나요?</summary><p>아이디별 크롬 창을 구분하는 번호로, 자동으로 정해집니다. 바꿀 필요가 없습니다.</p></details>
+        <details><summary>작업 시작을 눌렀는데 아무 반응이 없어요.</summary><p>체크한 작업이 없으면 '선택된 작업이 없습니다' 경고가 뜹니다. 예약 업로드가 진행 중이면 한 번에 하나씩 처리하므로 끝날 때까지 기다렸다가 시작됩니다. 로그 창을 확인하세요.</p></details>
+        <details><summary>업데이트 후 'Failed to load Python DLL' 창이 떠요.</summary><p>아주 예전 버전(v1.32 이하)에서 올라올 때 한 번 생길 수 있습니다. <span class="ui">확인</span>을 누르고 프로그램을 다시 실행하면 됩니다.</p></details>
+      </div>
+    </section>
+
+    <footer>v1.54(2026-11-21) 기준으로 작성했습니다. 버전별 바뀐 점은 <a href="https://github.com/pengyu21/cafe_auto_1year/blob/main/CHANGELOG.md">변경 내역</a>에서 볼 수 있습니다.</footer>
+  </main>
+</div>
+</body>
+</html>
