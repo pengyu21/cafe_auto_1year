@@ -697,6 +697,7 @@ class CalendarDialog(QDialog):
 class WorkerSignals(QObject):
     log = Signal(str)
     alert = Signal(str, str, str) # key(같은 key의 팝업은 하나만 유지), title, message
+    prelogin = Signal(object) # 사전 로그인 진행 상태 (대시보드 안내 줄 갱신용)
     finished = Signal()
 
 class TaskLoaderThread(QThread):
@@ -784,7 +785,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.55"
+__version__ = "1.56"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -1150,6 +1151,30 @@ del "%~f0"
         
         port_layout.addStretch()
         layout.addLayout(port_layout)
+
+        # 사전 로그인 안내 줄: 프로그램을 켜면 바로 크롬을 띄우지 않고, 누구를 몇 명 할지 보여준 뒤 버튼을 눌러야 시작
+        self.prelogin_bar = QFrame()
+        self.prelogin_bar.setObjectName("prelogin_bar")
+        self.prelogin_bar.setStyleSheet("QFrame#prelogin_bar { background-color: #fdf6ec; border: 1px solid #f5dab1; border-radius: 6px; }")
+        bar_layout = QHBoxLayout(self.prelogin_bar)
+        bar_layout.setContentsMargins(10, 6, 10, 6)
+        self.lbl_prelogin_state = QLabel("")
+        self.lbl_prelogin_state.setStyleSheet("font-size: 10pt; color: #b88230; font-weight: bold;")
+        self.lbl_prelogin_state.setTextFormat(Qt.RichText)
+        self.lbl_prelogin_state.setWordWrap(True)
+        bar_layout.addWidget(self.lbl_prelogin_state, 1)
+        self.prelogin_progress = QProgressBar()
+        self.prelogin_progress.setFixedWidth(220)
+        self.prelogin_progress.setFormat("%v / %m명")
+        self.prelogin_progress.hide()
+        bar_layout.addWidget(self.prelogin_progress)
+        self.btn_prelogin_start = QPushButton("▶ 사전 로그인 시작")
+        self.btn_prelogin_start.setCursor(Qt.PointingHandCursor)
+        self.btn_prelogin_start.setStyleSheet("background-color: #e6a23c; color: white; font-weight: bold; border-radius: 4px; padding: 5px 14px;")
+        self.btn_prelogin_start.clicked.connect(self.on_prelogin_start_clicked)
+        bar_layout.addWidget(self.btn_prelogin_start)
+        self.prelogin_bar.hide()
+        layout.addWidget(self.prelogin_bar)
         
         # 메인: 스플리터
         splitter = QSplitter(Qt.Horizontal)
@@ -1293,6 +1318,8 @@ del "%~f0"
         self.captcha_ids = {}
         # 수동 로그인 감시 스레드가 돌고 있는 아이디 (재시도마다 같은 브라우저에 감시 스레드가 중복으로 붙지 않게)
         self.login_watchers = set()
+        # 스케줄러 대기를 깨우는 신호 ('사전 로그인 시작' 버튼)
+        self.scheduler_wake = threading.Event()
         # 예약 실행/수동 실행/사전 로그인이 동시에 같은 작업·같은 브라우저(포트)를 쓰지 않도록 한 번에 하나만 실행
         self.task_run_lock = threading.Lock()
 
@@ -2180,8 +2207,9 @@ del "%~f0"
             except Exception as e:
                 self.update_log_signal(f"세션 유지 확인 중 오류: {e}")
 
-            # 주기적 대기 (60초 - 구글 API 할당량 초과 방지)
-            time.sleep(60)
+            # 주기적 대기 (60초 - 구글 API 할당량 초과 방지). '사전 로그인 시작' 버튼을 누르면 바로 깨어남
+            self.scheduler_wake.wait(60)
+            self.scheduler_wake.clear()
                 
 
 
@@ -2240,19 +2268,126 @@ del "%~f0"
                 if uid not in upcoming or res_time < upcoming[uid][0]:
                     upcoming[uid] = (res_time, task)
 
+        # 이번에 확인할 아이디 (재확인 간격이 지난 아이디만)
+        pending = []
         for uid, (res_time, task) in sorted(upcoming.items(), key=lambda x: x[1][0]):
+            last = self.prelogin_checked.get(uid)
+            if last and now - last < timedelta(hours=PRELOGIN_RECHECK_HOURS):
+                continue
+            pending.append((uid, res_time, task))
+
+        batch = getattr(self, 'prelogin_batch', None)
+        if not pending:
+            # 진행하던 묶음이 다 끝났으면 결과를 보여줌
+            if batch and batch.get('mode') == 'run':
+                batch['mode'] = 'done'
+                batch['current'] = ""
+                self._emit_prelogin_state()
+            elif batch and batch.get('mode') == 'ask':
+                self.prelogin_batch = None
+                self._emit_prelogin_state()
+            return
+
+        # 프로그램을 켠 뒤 사용자가 '사전 로그인 시작'을 누르기 전에는 크롬을 띄우지 않고 대상만 보여줌
+        if not getattr(self, 'prelogin_approved', False):
+            self.prelogin_batch = {'mode': 'ask', 'items': [(uid, task.get('name') or uid, rt.strftime("%m-%d %H:%M")) for uid, rt, task in pending]}
+            self._emit_prelogin_state()
+            return
+
+        # 진행 묶음 (진행 중에 새로 대상이 생기면 같은 묶음에 더함)
+        if not batch or batch.get('mode') != 'run':
+            batch = self.prelogin_batch = {'mode': 'run', 'items': [], 'results': {}, 'current': ""}
+        known = {it[0] for it in batch['items']}
+        for uid, rt, task in pending:
+            if uid not in known:
+                batch['items'].append((uid, task.get('name') or uid, rt.strftime("%m-%d %H:%M")))
+            else:
+                batch['results'].pop(uid, None) # 다시 확인하는 아이디 (캡챠 재확인 등)
+        self._emit_prelogin_state()
+
+        for uid, res_time, task in pending:
             if not self.scheduler_running:
                 break
             # 업로드 시간이 된 작업이 생기면 사전 로그인은 멈추고 업로드 먼저 (다음 루프에서 이어서 진행)
             if any(t <= datetime.now() for t in run_times):
                 self.update_log_signal("    [사전 로그인] 업로드할 작업이 있어 사전 로그인을 잠시 멈춥니다.")
+                batch['current'] = "(업로드 먼저 진행 - 끝나면 이어서 진행)"
+                self._emit_prelogin_state()
                 break
-            last = self.prelogin_checked.get(uid)
-            if last and now - last < timedelta(hours=PRELOGIN_RECHECK_HOURS):
-                continue
             self.prelogin_checked[uid] = now
+            batch['current'] = task.get('name') or uid
+            self._emit_prelogin_state()
+            batch['results'][uid] = self._prelogin_one(uid, task, res_time.strftime("%m-%d %H:%M"))
+            batch['current'] = ""
+            self._emit_prelogin_state()
 
-            self._prelogin_one(uid, task, res_time.strftime("%m-%d %H:%M"))
+    def _emit_prelogin_state(self):
+        """사전 로그인 상태를 대시보드로 보냄 (스케줄러 스레드 -> 메인 스레드)"""
+        import copy
+        state = copy.deepcopy(getattr(self, 'prelogin_batch', None))
+        if hasattr(self, 'prelogin_state_signal'):
+            self.prelogin_state_signal(state)
+
+    def on_prelogin_state(self, state):
+        """사전 로그인 안내 줄 갱신 (메인 스레드)"""
+        if not hasattr(self, 'prelogin_bar'):
+            return
+        if not state:
+            self.prelogin_bar.hide()
+            return
+        items = state.get('items', [])
+
+        def short(lst, n=6):
+            return ", ".join(lst[:n]) + (f" 외 {len(lst) - n}명" if len(lst) > n else "")
+
+        mode = state.get('mode')
+        if mode == 'ask':
+            names = [f"{name}({when})" for _, name, when in items]
+            tip = "\n".join(f"{name} [{uid}] 업로드 예정 {when}" for uid, name, when in items)
+            self.lbl_prelogin_state.setText(
+                f"🔑 사전 로그인 대기 {len(items)}명 (24시간 안에 업로드 예정): {short(names)}<br>"
+                f"<span style='font-weight:normal; color:#909399;'>버튼을 누르면 한 명씩 크롬을 열어 로그인 상태를 확인합니다. "
+                f"한 번 시작하면 이후 새로 생기는 대상은 자동으로 진행합니다.</span>")
+            self.prelogin_progress.hide()
+            self.btn_prelogin_start.show()
+            self.btn_prelogin_start.setEnabled(True)
+            self.btn_prelogin_start.setText(f"▶ 사전 로그인 시작 ({len(items)}명)")
+        else:
+            results = state.get('results', {})
+            total = len(items)
+            done = sum(1 for uid, _, _ in items if uid in results)
+            labels = {'ok': '✅ 로그인 유지', 'auto': '✅ 자동 로그인', 'captcha': '🔒 캡챠 - 직접 로그인 필요',
+                      'fail': '⚠ 로그인 실패 - 직접 로그인 필요', 'error': '⚠ 오류'}
+            ok = sum(1 for r in results.values() if r in ('ok', 'auto'))
+            capt = sum(1 for r in results.values() if r == 'captcha')
+            bad = done - ok - capt
+            summary = f"✅ 성공 {ok}" + (f" · 🔒 캡챠 {capt}" if capt else "") + (f" · ⚠ 실패 {bad}" if bad else "")
+            tip = "\n".join(f"{name} [{uid}] {when} : {labels.get(results.get(uid), '⏳ 대기')}" for uid, name, when in items)
+            self.prelogin_progress.setRange(0, max(total, 1))
+            self.prelogin_progress.setValue(done)
+            self.prelogin_progress.show()
+            self.btn_prelogin_start.hide()
+            if mode == 'done':
+                need = [name for uid, name, _ in items if results.get(uid) not in ('ok', 'auto')]
+                extra = (f"<br><span style='color:#e74c3c;'>직접 로그인 필요: {short(need)}</span>") if need else ""
+                self.lbl_prelogin_state.setText(f"🔑 사전 로그인 완료 {done}/{total}명 — {summary}{extra}")
+            else:
+                cur = state.get('current') or "다음 차례 준비 중"
+                self.lbl_prelogin_state.setText(
+                    f"🔑 사전 로그인 진행 중 {done}/{total}명 · 남은 {total - done}명 — 지금: <b>{cur}</b><br>"
+                    f"<span style='font-weight:normal;'>{summary}</span>")
+        self.prelogin_bar.setToolTip(tip)
+        self.prelogin_bar.show()
+
+    def on_prelogin_start_clicked(self):
+        """'사전 로그인 시작' 버튼: 이번 실행 동안 사전 로그인을 허용하고 스케줄러를 바로 깨움"""
+        self.prelogin_approved = True
+        self.btn_prelogin_start.setEnabled(False)
+        self.btn_prelogin_start.setText("곧 시작합니다...")
+        self.log(">>> [사전 로그인] 시작 버튼을 눌러 사전 로그인을 진행합니다.")
+        if not self.scheduler_running:
+            self.log("    예약 모드가 꺼져 있어 사전 로그인이 진행되지 않습니다. 예약 모드를 켜주세요.")
+        self.scheduler_wake.set()
 
     def keep_sessions_alive(self, tasks):
         """SESSION_KEEPALIVE_HOURS 시간대에 시트의 모든 아이디를 하루 한 번씩 열어 로그인 세션 갱신.
@@ -2338,9 +2473,11 @@ del "%~f0"
 
         bot = NaverCafeBot()
         keep_open = False
+        result = 'error'
         try:
             bot.start_browser(port=port, profile_dir=profile_dir)
             if bot.login(uid, task.get('pw', '')):
+                result = 'ok'
                 self.update_log_signal(f"    [{label}] {uid} 로그인 유지 중 - 확인 완료")
                 if touch_url:
                     # 카페까지 한 번 들어가 세션을 사용 중인 상태로 갱신 (오래 안 쓰면 로그인이 풀리는 것 방지)
@@ -2351,9 +2488,11 @@ del "%~f0"
                         pass
                 self.on_login_confirmed(uid, task)
             elif check_only:
+                result = 'fail'
                 # 새벽 세션 유지에서는 아이디/비밀번호를 넣지 않음 (보호조치 방지) - 업로드 24시간 전 사전 로그인에서 처리
                 self.update_log_signal(f"    [{label}] {uid} 로그인이 풀려 있음 - 업로드 24시간 전 사전 로그인에서 처리합니다.")
             elif task.get('pw') and self._auto_login_with_retry(bot, uid, task['pw']):
+                result = 'auto'
                 self.update_log_signal(f"    [{label}] {uid} 로그인이 풀려 있어 자동 로그인 완료")
                 self.on_login_confirmed(uid, task)
             else:
@@ -2363,6 +2502,7 @@ del "%~f0"
                         bot.driver.get("https://nid.naver.com/nidlogin.login")
                 except:
                     pass
+                result = 'captcha' if bot.last_login_error == "captcha" else 'fail'
                 if bot.last_login_error == "captcha":
                     title, reason = "캡챠로 수동로그인 필요", "자동 로그인 중 캡챠(자동입력 방지)가 떴습니다."
                     if re.match(r"\d{4}-\d{2}-\d{2}", str(task.get('next_run', ''))):
@@ -2386,6 +2526,7 @@ del "%~f0"
                     f"열려 있는 브라우저(Port {port})에서 '로그인 상태 유지'를 체크하고 직접 로그인해주세요."
                 )
         except Exception as e:
+            result = 'error'
             self.update_log_signal(f"    [{label}] {uid} 확인 중 오류: {e}")
         finally:
             # 실패 시엔 사용자가 로그인할 수 있도록 브라우저를 그대로 둠 (업로드 시 같은 포트로 이어서 사용)
@@ -2394,6 +2535,7 @@ del "%~f0"
                     bot.close_browser(wait=0)
                 except:
                     pass
+        return result
 
     def _captcha_lock_path(self):
         return os.path.join(get_data_dir(), "captcha_lock.json")
@@ -3190,6 +3332,8 @@ if __name__ == "__main__":
     window.update_log_signal = signals.log.emit
     signals.alert.connect(window.show_alert)
     window.alert_signal = signals.alert.emit
+    signals.prelogin.connect(window.on_prelogin_state)
+    window.prelogin_state_signal = signals.prelogin.emit
     
     window.show()
     sys.exit(app.exec())
