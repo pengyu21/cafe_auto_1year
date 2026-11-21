@@ -32,12 +32,15 @@ PRELOGIN_AHEAD_HOURS = 24
 PRELOGIN_RECHECK_HOURS = 12
 # 업로드까지 이 시간(분) 이내로 남은 아이디는 사전 로그인을 건너뜀 (업로드 때 로그인 처리)
 PRELOGIN_SKIP_MIN = 30
-# 사전 로그인 중 캡챠가 뜬 아이디는 이 시간(분) 뒤에 다시 자동 로그인 시도 (캡챠는 간헐적이라 다시 하면 통과되는 경우가 많음)
+# 사전 로그인 중 캡챠가 뜬 아이디의 로그인 상태(쿠키) 재확인 간격(분) - 아이디/비밀번호는 입력하지 않고 수동 로그인 여부만 확인
 PRELOGIN_CAPTCHA_RETRY_MIN = 30
-# 캡챠가 뜨면 이 시간(초) 기다렸다가 그 자리에서 한 번 더 자동 로그인 시도
-CAPTCHA_IMMEDIATE_RETRY_SEC = 30
-# 여러 아이디를 연달아 자동 로그인하면 캡챠가 잘 뜨므로 자동 로그인 사이 최소 간격(초)
-AUTO_LOGIN_GAP_SEC = 30
+# [보호조치 방지] 캡챠가 뜬 아이디는 이 시간(시간) 동안 자동 로그인(아이디/비밀번호 입력)을 하지 않음
+# (예전엔 30초 뒤 + 30분마다 계속 다시 입력해서, 캡챠를 못 푼 로그인 실패가 쌓여 네이버 보호조치로 계정이 잠김)
+CAPTCHA_COOLDOWN_HOURS = 24
+# [보호조치 방지] 캡챠가 이 횟수만큼 뜨면 수동 로그인이 확인될 때까지 자동 로그인을 완전히 멈춤
+CAPTCHA_MAX_AUTO_HITS = 2
+# 여러 아이디를 연달아 자동 로그인하면 캡챠가 잘 뜨므로 자동 로그인 사이 최소 간격(초) - 매번 이 범위에서 랜덤
+AUTO_LOGIN_GAP_SEC = (120, 240)
 # 업로드 실패 시 재시도 간격(분): 1번째 실패 후 10분, 2번째 실패 후 30분 뒤 재시도, 3번째 실패하면 일정 칸에 에러 기록
 # (예전엔 1분마다 바로 재시도해서 네이버 쪽 일시적 문제(서버 지연·연속 작업 제한 등)가 풀리기 전에 3번 다 실패하던 문제)
 UPLOAD_RETRY_DELAY_MIN = [10, 30]
@@ -754,7 +757,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.51"
+__version__ = "1.52"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -2240,9 +2243,10 @@ del "%~f0"
                     if bot.last_login_error == "captcha":
                         title, reason = "캡챠로 수동로그인 필요", "자동 로그인 중 캡챠(자동입력 방지)가 떴습니다."
                         self.set_captcha_flag(task, when)
-                        # 12시간을 기다리지 않고 PRELOGIN_CAPTCHA_RETRY_MIN분 뒤 다시 자동 로그인 시도
+                        # PRELOGIN_CAPTCHA_RETRY_MIN분 뒤 로그인 상태(쿠키)만 다시 확인 - 자동 로그인 입력은 캡챠 기록에 따라 막힘
                         self.prelogin_checked[uid] = now - timedelta(hours=PRELOGIN_RECHECK_HOURS) + timedelta(minutes=PRELOGIN_CAPTCHA_RETRY_MIN)
-                        reason += f"\n{PRELOGIN_CAPTCHA_RETRY_MIN}분 뒤 자동으로 다시 시도합니다."
+                        reason += (f"\n보호조치 방지: {self._captcha_lock_reason(uid) or '자동 로그인 일시 중지'}"
+                                   f"\n(로그인 상태만 {PRELOGIN_CAPTCHA_RETRY_MIN}분마다 확인하고, 아이디/비밀번호는 다시 입력하지 않습니다)")
                     else:
                         title, reason = "사전 로그인 필요", "로그인이 풀려 있고 자동 로그인에 실패했습니다 (비밀번호/추가 인증 등)."
                     self.update_log_signal(f"    [사전 로그인] {uid} {title} - 열린 브라우저에서 직접 로그인해주세요.")
@@ -2267,20 +2271,78 @@ del "%~f0"
                     except:
                         pass
 
+    def _captcha_lock_path(self):
+        return os.path.join(get_data_dir(), "captcha_lock.json")
+
+    def _load_captcha_lock(self):
+        """캡챠가 뜬 아이디 기록 {uid: {'count': 횟수, 'last': 'YYYY-MM-DD HH:MM:SS'}} (프로그램을 껐다 켜도 유지)"""
+        if not hasattr(self, 'captcha_lock'):
+            try:
+                with open(self._captcha_lock_path(), encoding='utf-8') as f:
+                    self.captcha_lock = json.load(f)
+            except Exception:
+                self.captcha_lock = {}
+        return self.captcha_lock
+
+    def _save_captcha_lock(self):
+        try:
+            with open(self._captcha_lock_path(), 'w', encoding='utf-8') as f:
+                json.dump(self.captcha_lock, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.update_log_signal(f"    캡챠 기록 저장 실패: {e}")
+
+    def _captcha_lock_reason(self, uid):
+        """자동 로그인을 막아야 하면 그 이유 문자열, 아니면 None"""
+        from datetime import datetime, timedelta
+        info = self._load_captcha_lock().get(uid)
+        if not info:
+            return None
+        if info.get('count', 0) >= CAPTCHA_MAX_AUTO_HITS:
+            return f"캡챠가 {info['count']}번 떠서 수동 로그인 전까지 자동 로그인 중지"
+        try:
+            last = datetime.strptime(info.get('last', ''), "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+        until = last + timedelta(hours=CAPTCHA_COOLDOWN_HOURS)
+        if datetime.now() < until:
+            return f"캡챠가 떠서 {until.strftime('%m-%d %H:%M')}까지 자동 로그인 중지"
+        return None
+
+    def _record_captcha_hit(self, uid):
+        from datetime import datetime
+        lock = self._load_captcha_lock()
+        info = lock.get(uid, {})
+        lock[uid] = {'count': info.get('count', 0) + 1, 'last': datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        self._save_captcha_lock()
+
+    def _clear_captcha_lock(self, uid):
+        if self._load_captcha_lock().pop(uid, None) is not None:
+            self._save_captcha_lock()
+
     def _auto_login_with_retry(self, bot, uid, pw):
-        """자동 로그인 (직전 자동 로그인과 AUTO_LOGIN_GAP_SEC초 간격을 두고, 캡챠가 뜨면 잠시 뒤 한 번 더 시도)"""
+        """자동 로그인 1회 (보호조치 방지: 캡챠가 뜨면 그 자리에서 다시 입력하지 않고, 이후 일정 시간 자동 로그인을 막음).
+        직전 자동 로그인과는 AUTO_LOGIN_GAP_SEC 범위의 랜덤 간격을 둠"""
         import time
-        wait = AUTO_LOGIN_GAP_SEC - (time.time() - getattr(self, 'last_auto_login_at', 0))
+        import random
+        reason = self._captcha_lock_reason(uid)
+        if reason:
+            bot.last_login_error = "captcha"
+            self.update_log_signal(f"    [자동 로그인] {uid} {reason} (보호조치 방지) - 수동 로그인 필요")
+            return False
+        gap = random.uniform(*AUTO_LOGIN_GAP_SEC)
+        wait = gap - (time.time() - getattr(self, 'last_auto_login_at', 0))
         if wait > 0:
+            self.update_log_signal(f"    [자동 로그인] {uid} 연속 로그인 방지를 위해 {int(wait)}초 기다립니다.")
             time.sleep(wait)
         try:
             if bot.auto_login(uid, pw):
+                self._clear_captcha_lock(uid)
                 return True
-            if bot.last_login_error != "captcha":
-                return False
-            self.update_log_signal(f"    [사전 로그인] {uid} 캡챠가 떠서 {CAPTCHA_IMMEDIATE_RETRY_SEC}초 뒤 한 번 더 시도합니다.")
-            time.sleep(CAPTCHA_IMMEDIATE_RETRY_SEC)
-            return bot.auto_login(uid, pw)
+            if bot.last_login_error == "captcha":
+                self._record_captcha_hit(uid)
+                self.update_log_signal(f"    [자동 로그인] {uid} 캡챠가 떠서 다시 입력하지 않습니다. "
+                                       f"({self._captcha_lock_reason(uid) or '자동 로그인 일시 중지'})")
+            return False
         finally:
             self.last_auto_login_at = time.time()
 
@@ -2330,6 +2392,7 @@ del "%~f0"
 
     def on_login_confirmed(self, uid, task=None):
         """로그인 확인 시 사전 로그인 캡챠 표시 해제 + 업로드 캡챠 에러 일정 복구"""
+        self._clear_captcha_lock(uid)
         if task is None:
             # 완료된 행에는 캡챠 표시가 없으므로 진행 중인 행을 먼저 찾음
             same_id = [t for t in getattr(self, 'tasks', []) or [] if t.get('id') == uid]
