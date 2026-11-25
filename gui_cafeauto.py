@@ -32,6 +32,8 @@ PRELOGIN_AHEAD_HOURS = 24
 PRELOGIN_RECHECK_HOURS = 12
 # 업로드까지 이 시간(분) 이내로 남은 아이디는 사전 로그인을 건너뜀 (업로드 때 로그인 처리)
 PRELOGIN_SKIP_MIN = 30
+# 어떤 아이디든 이 시간(분) 안에 업로드가 있으면 사전 로그인을 새로 시작하지 않음 (사전 로그인 한 명이 업로드 시각을 넘겨 업로드가 밀리지 않게)
+PRELOGIN_UPLOAD_GUARD_MIN = 15
 # 사전 로그인 중 캡챠가 뜬 아이디의 로그인 상태(쿠키) 재확인 간격(분) - 아이디/비밀번호는 입력하지 않고 수동 로그인 여부만 확인
 PRELOGIN_CAPTCHA_RETRY_MIN = 30
 # [보호조치 방지] 캡챠가 뜬 아이디는 이 시간(시간) 동안 자동 로그인(아이디/비밀번호 입력)을 하지 않음
@@ -797,7 +799,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.57"
+__version__ = "1.58"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -2340,8 +2342,11 @@ del "%~f0"
         if not self.scheduler_running:
             return
         # 업로드 시간이 된 작업이 생기면 사전 로그인은 멈추고 업로드 먼저 (다음 루프에서 이어서 진행)
-        if any(t <= datetime.now() for t in run_times):
-            self.update_log_signal("    [사전 로그인] 업로드할 작업이 있어 사전 로그인을 잠시 멈춥니다.")
+        # 사전 로그인 한 명은 자동 로그인 대기 + 둘러보기까지 최대 십몇 분 걸리므로, 업로드가 곧 있으면 새로 시작하지 않음 (업로드가 밀리지 않게)
+        guard = datetime.now() + timedelta(minutes=PRELOGIN_UPLOAD_GUARD_MIN)
+        if any(t <= guard for t in run_times):
+            if batch.get('current') != "(업로드 먼저 진행 - 끝나면 이어서 진행)":
+                self.update_log_signal(f"    [사전 로그인] {PRELOGIN_UPLOAD_GUARD_MIN}분 안에 업로드할 작업이 있어 사전 로그인을 잠시 멈춥니다.")
             batch['current'] = "(업로드 먼저 진행 - 끝나면 이어서 진행)"
             self._emit_prelogin_state()
             return
