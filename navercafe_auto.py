@@ -487,6 +487,31 @@ class NaverCafeBot:
             print(f"로그인 처리 중 에러: {e}")
             return False
 
+    def browse_like_user(self, urls, seconds):
+        """로그인 확인 뒤 바로 닫지 않고 몇 페이지를 천천히 둘러봄 (아이디를 연달아 바꾸며 로그인만 하고 닫는 패턴을 피함).
+        urls를 차례로 열고 남은 시간 동안 조금씩 스크롤. 실패해도 무시"""
+        import random
+        urls = [u for u in urls if u]
+        if not urls or seconds <= 0:
+            return
+        end = time.time() + seconds
+        per_page = seconds / len(urls)
+        for url in urls:
+            if time.time() >= end:
+                break
+            try:
+                self.driver.get(url)
+            except Exception:
+                continue
+            page_end = min(end, time.time() + per_page)
+            time.sleep(random.uniform(2, 4))
+            while time.time() < page_end:
+                try:
+                    self.driver.execute_script("window.scrollBy(0, arguments[0]);", random.randint(-150, 450))
+                except Exception:
+                    break
+                time.sleep(min(random.uniform(3, 8), max(0, page_end - time.time())))
+
     def auto_login(self, user_id, user_pw):
         """[사전 로그인 자동화] 로그인 페이지에서 아이디/비밀번호를 붙여넣고 '로그인 상태 유지'를 체크해 로그인 시도.
         업로드 하루 전에만 호출하므로 캡챠가 떠도 사용자가 직접 처리할 시간이 있음.

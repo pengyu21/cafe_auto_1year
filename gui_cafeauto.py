@@ -42,13 +42,25 @@ CAPTCHA_MAX_AUTO_HITS = 1
 # [보호조치 방지] 같은 아이디에 아이디/비밀번호를 넣는 자동 로그인은 이 시간(시간)에 한 번까지만
 AUTO_LOGIN_MIN_INTERVAL_HOURS = 6
 # 여러 아이디를 연달아 자동 로그인하면 캡챠가 잘 뜨므로 자동 로그인 사이 최소 간격(초) - 매번 이 범위에서 랜덤
-AUTO_LOGIN_GAP_SEC = (120, 240)
+AUTO_LOGIN_GAP_SEC = (300, 600)
+# [이상 감지 방지] 사전 로그인/세션 유지에서 다른 아이디의 크롬을 열기 전 최소 간격(초) - 매번 이 범위에서 랜덤
+# (한 PC(IP)에서 여러 아이디를 몇 분 사이에 연달아 바꿔 들어가면 네이버가 이상 접속으로 보고 캡챠/보호조치를 검)
+# 대기는 스케줄러를 막지 않음 - 기다리는 동안에도 업로드 예약은 바로 실행
+PRELOGIN_ID_GAP_SEC = (300, 600)
+# [이상 감지 방지] 업로드하면서 다른 아이디로 바꿀 때 직전 아이디의 크롬을 닫은 뒤 기다리는 최소 간격(초)
+UPLOAD_ID_GAP_SEC = (60, 150)
+# [이상 감지 방지] 사전 로그인에서 로그인이 확인되면 바로 닫지 않고 네이버/카페를 둘러보는 시간(초)
+PRELOGIN_DWELL_SEC = (60, 120)
+# [이상 감지 방지] 새벽 세션 유지에서 둘러보는 시간(초)
+KEEPALIVE_DWELL_SEC = (30, 60)
 # [세션 유지] 매일 새벽 이 시간대(시)에 시트의 모든 아이디 브라우저를 한 번씩 열어 네이버/카페에 접속해 로그인 세션을 갱신
 # (업로드가 몇 주씩 없는 아이디는 접속이 없어 로그인이 풀리기 쉬움).
 # 보호조치 방지를 위해 새벽에는 아이디/비밀번호를 입력하지 않음 - 살아 있는 세션만 갱신하고, 풀린 아이디는 업로드 24시간 전 사전 로그인에서 처리
 SESSION_KEEPALIVE_HOURS = (3, 6)
 # 세션 유지 확인 사이 랜덤 간격(초) - 여러 아이디가 한꺼번에 접속하는 패턴을 피함
-SESSION_KEEPALIVE_GAP_SEC = (30, 90)
+SESSION_KEEPALIVE_GAP_SEC = (180, 360)
+# 세션 유지는 이 일수 동안 로그인이 확인된 적 없는 아이디만 (오래된 순서로) 처리 - 매일 모든 아이디를 열지 않음
+KEEPALIVE_IDLE_DAYS = 3
 # 업로드 실패 시 재시도 간격(분): 1번째 실패 후 10분, 2번째 실패 후 30분 뒤 재시도, 3번째 실패하면 일정 칸에 에러 기록
 # (예전엔 1분마다 바로 재시도해서 네이버 쪽 일시적 문제(서버 지연·연속 작업 제한 등)가 풀리기 전에 3번 다 실패하던 문제)
 UPLOAD_RETRY_DELAY_MIN = [10, 30]
@@ -785,7 +797,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.56"
+__version__ = "1.57"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -2147,9 +2159,14 @@ del "%~f0"
                                         current_bot.close_browser()
                                     except:
                                         pass
+                                    self._note_browser_closed(current_user_id)
                                     current_bot = None
                                     current_user_id = None
-                            
+
+                                # 직전에 다른 아이디의 크롬을 닫았으면 잠깐 쉬고 염 (이상 감지 방지)
+                                self._wait_before_upload_switch(uid)
+                                if not self.scheduler_running: break
+
                                 # 새 브라우저 설정
                                 port = get_port_for_id(uid)
                                 
@@ -2178,6 +2195,7 @@ del "%~f0"
                                     current_bot.close_browser()
                                 except:
                                     pass
+                                self._note_browser_closed(current_user_id)
                                 current_bot = None
                                 current_user_id = None
 
@@ -2186,6 +2204,7 @@ del "%~f0"
                             current_bot.close_browser()
                         except:
                             pass
+                        self._note_browser_closed(current_user_id)
                         current_bot = None
                         current_user_id = None
                 
@@ -2274,9 +2293,21 @@ del "%~f0"
             last = self.prelogin_checked.get(uid)
             if last and now - last < timedelta(hours=PRELOGIN_RECHECK_HOURS):
                 continue
+            # 프로그램을 다시 켜도 최근에 로그인이 확인된 아이디는 다시 열지 않음 (켤 때마다 전부 몰아서 확인하지 않게)
+            touched = self._last_session_touch(uid)
+            if touched and now - touched < timedelta(hours=PRELOGIN_RECHECK_HOURS) and uid not in self.captcha_ids:
+                continue
             pending.append((uid, res_time, task))
 
         batch = getattr(self, 'prelogin_batch', None)
+        # 업로드/직접 로그인 등으로 그사이 로그인이 확인된 아이디는 진행 결과를 '로그인 유지'로 채움
+        if batch and batch.get('mode') == 'run':
+            for item in batch['items']:
+                u = item[0]
+                touched, checked = self._last_session_touch(u), self.prelogin_checked.get(u)
+                if (touched and batch['results'].get(u) not in ('ok', 'auto') and u not in self.captcha_ids
+                        and (checked is None or touched >= checked)):
+                    batch['results'][u] = 'ok'
         if not pending:
             # 진행하던 묶음이 다 끝났으면 결과를 보여줌
             if batch and batch.get('mode') == 'run':
@@ -2305,21 +2336,34 @@ del "%~f0"
                 batch['results'].pop(uid, None) # 다시 확인하는 아이디 (캡챠 재확인 등)
         self._emit_prelogin_state()
 
-        for uid, res_time, task in pending:
-            if not self.scheduler_running:
-                break
-            # 업로드 시간이 된 작업이 생기면 사전 로그인은 멈추고 업로드 먼저 (다음 루프에서 이어서 진행)
-            if any(t <= datetime.now() for t in run_times):
-                self.update_log_signal("    [사전 로그인] 업로드할 작업이 있어 사전 로그인을 잠시 멈춥니다.")
-                batch['current'] = "(업로드 먼저 진행 - 끝나면 이어서 진행)"
-                self._emit_prelogin_state()
-                break
-            self.prelogin_checked[uid] = now
-            batch['current'] = task.get('name') or uid
+        # [이상 감지 방지] 한 번에 한 아이디만 처리하고 돌아감. 다음 아이디는 PRELOGIN_ID_GAP_SEC 뒤 (기다리는 동안 업로드는 그대로 실행)
+        if not self.scheduler_running:
+            return
+        # 업로드 시간이 된 작업이 생기면 사전 로그인은 멈추고 업로드 먼저 (다음 루프에서 이어서 진행)
+        if any(t <= datetime.now() for t in run_times):
+            self.update_log_signal("    [사전 로그인] 업로드할 작업이 있어 사전 로그인을 잠시 멈춥니다.")
+            batch['current'] = "(업로드 먼저 진행 - 끝나면 이어서 진행)"
             self._emit_prelogin_state()
-            batch['results'][uid] = self._prelogin_one(uid, task, res_time.strftime("%m-%d %H:%M"))
-            batch['current'] = ""
+            return
+        wait = self._switch_wait_left()
+        if wait > 0:
+            nxt = (datetime.now() + timedelta(seconds=wait)).strftime("%H:%M")
+            batch['current'] = (f"다음 아이디는 {nxt}쯤 (이상 감지 방지: 아이디 사이 "
+                                f"{PRELOGIN_ID_GAP_SEC[0] // 60}~{PRELOGIN_ID_GAP_SEC[1] // 60}분 간격)")
             self._emit_prelogin_state()
+            return
+        uid, res_time, task = pending[0]
+        self.prelogin_checked[uid] = now
+        batch['current'] = task.get('name') or uid
+        self._emit_prelogin_state()
+        touch_url = None
+        try:
+            touch_url = self.sheet_mgr.get_cafe_url(task.get('cafe_name', '')) if task.get('cafe_name') else None
+        except Exception:
+            pass
+        batch['results'][uid] = self._prelogin_one(uid, task, res_time.strftime("%m-%d %H:%M"), touch_url=touch_url)
+        batch['current'] = ""
+        self._emit_prelogin_state()
 
     def _emit_prelogin_state(self):
         """사전 로그인 상태를 대시보드로 보냄 (스케줄러 스레드 -> 메인 스레드)"""
@@ -2346,8 +2390,9 @@ del "%~f0"
             tip = "\n".join(f"{name} [{uid}] 업로드 예정 {when}" for uid, name, when in items)
             self.lbl_prelogin_state.setText(
                 f"🔑 사전 로그인 대기 {len(items)}명 (24시간 안에 업로드 예정): {short(names)}<br>"
-                f"<span style='font-weight:normal; color:#909399;'>버튼을 누르면 한 명씩 크롬을 열어 로그인 상태를 확인합니다. "
-                f"한 번 시작하면 이후 새로 생기는 대상은 자동으로 진행합니다.</span>")
+                f"<span style='font-weight:normal; color:#909399;'>버튼을 누르면 한 명씩 크롬을 열어 로그인 상태를 확인합니다 "
+                f"(네이버 이상 감지 방지를 위해 아이디 사이 {PRELOGIN_ID_GAP_SEC[0] // 60}~{PRELOGIN_ID_GAP_SEC[1] // 60}분 간격, "
+                f"로그인 뒤 1~2분 둘러보고 닫음). 한 번 시작하면 이후 새로 생기는 대상은 자동으로 진행합니다.</span>")
             self.prelogin_progress.hide()
             self.btn_prelogin_start.show()
             self.btn_prelogin_start.setEnabled(True)
@@ -2428,8 +2473,17 @@ del "%~f0"
             cur = by_uid.get(uid)
             if cur is None or (cur.get('is_completed') and not t.get('is_completed')):
                 by_uid[uid] = t
-        for uid, task in by_uid.items():
+        # [이상 감지 방지] 다른 아이디를 닫은 지 얼마 안 됐으면 다음 루프에서
+        if self._switch_wait_left() > 0:
+            return
+        # 로그인 확인이 가장 오래된 아이디부터 (매일 모든 아이디를 열지 않고 KEEPALIVE_IDLE_DAYS일 넘게 안 쓴 아이디만)
+        never = datetime(2000, 1, 1)
+        for uid, task in sorted(by_uid.items(), key=lambda x: self._last_session_touch(x[0]) or never):
             if self.keepalive_done.get(uid) == today:
+                continue
+            touched = self._last_session_touch(uid)
+            if touched and now - touched < timedelta(days=KEEPALIVE_IDLE_DAYS):
+                self.keepalive_done[uid] = today
                 continue
             # 캡챠/로그인 실패로 막혀 있는 아이디는 건드리지 않음 (사람이 직접 로그인해야 함)
             if uid in self.captcha_ids or self._captcha_lock_reason(uid):
@@ -2454,11 +2508,13 @@ del "%~f0"
             rt = parse_time(task)
             if rt and not task.get('is_completed'):
                 when = rt.strftime("%m-%d %H:%M")
-            self._prelogin_one(uid, task, when, label="세션 유지", touch_url=touch_url, check_only=True)
+            self._prelogin_one(uid, task, when, label="세션 유지", touch_url=touch_url, check_only=True, dwell=KEEPALIVE_DWELL_SEC)
+            # 세션 유지끼리는 SESSION_KEEPALIVE_GAP_SEC 간격 (사전 로그인 간격보다 짧음 - 아이디/비밀번호는 넣지 않으므로)
             self.keepalive_next_at = time.time() + random.uniform(*SESSION_KEEPALIVE_GAP_SEC)
+            self.next_switch_at = self.keepalive_next_at
             return
 
-    def _prelogin_one(self, uid, task, when, label="사전 로그인", touch_url=None, check_only=False):
+    def _prelogin_one(self, uid, task, when, label="사전 로그인", touch_url=None, check_only=False, dwell=PRELOGIN_DWELL_SEC):
         """아이디 하나의 브라우저를 열어 로그인 상태 확인 -> 풀려 있으면 자동 로그인(캡챠 기록에 따라 막힐 수 있음),
         실패하면 브라우저를 로그인 화면에 띄워둔 채 알림. touch_url이 있으면 로그인 확인 후 그 페이지(카페)도 잠깐 방문"""
         import time
@@ -2479,14 +2535,8 @@ del "%~f0"
             if bot.login(uid, task.get('pw', '')):
                 result = 'ok'
                 self.update_log_signal(f"    [{label}] {uid} 로그인 유지 중 - 확인 완료")
-                if touch_url:
-                    # 카페까지 한 번 들어가 세션을 사용 중인 상태로 갱신 (오래 안 쓰면 로그인이 풀리는 것 방지)
-                    try:
-                        bot.driver.get(touch_url)
-                        time.sleep(random.uniform(4, 8))
-                    except Exception:
-                        pass
                 self.on_login_confirmed(uid, task)
+                self._dwell_after_login(bot, uid, label, touch_url, dwell)
             elif check_only:
                 result = 'fail'
                 # 새벽 세션 유지에서는 아이디/비밀번호를 넣지 않음 (보호조치 방지) - 업로드 24시간 전 사전 로그인에서 처리
@@ -2495,6 +2545,7 @@ del "%~f0"
                 result = 'auto'
                 self.update_log_signal(f"    [{label}] {uid} 로그인이 풀려 있어 자동 로그인 완료")
                 self.on_login_confirmed(uid, task)
+                self._dwell_after_login(bot, uid, label, touch_url, dwell)
             else:
                 keep_open = True
                 try:
@@ -2535,7 +2586,78 @@ del "%~f0"
                     bot.close_browser(wait=0)
                 except:
                     pass
+            self._note_browser_closed(uid)
         return result
+
+    def _dwell_after_login(self, bot, uid, label, touch_url, dwell):
+        """[이상 감지 방지] 로그인 확인 뒤 바로 닫고 다음 아이디로 넘어가지 않도록 네이버/카페를 잠깐 둘러봄.
+        카페까지 들어가면 세션도 사용 중인 상태로 갱신됨 (오래 안 쓰면 로그인이 풀리는 것 방지)"""
+        import random
+        if not dwell:
+            return
+        sec = random.uniform(*dwell)
+        self.update_log_signal(f"    [{label}] {uid} 바로 닫지 않고 {int(sec)}초 동안 네이버/카페를 둘러봅니다 (이상 감지 방지).")
+        try:
+            bot.browse_like_user(["https://www.naver.com", touch_url], sec)
+        except Exception:
+            pass
+
+    def _session_touch_path(self):
+        return os.path.join(get_data_dir(), "session_touch.json")
+
+    def _load_session_touch(self):
+        """아이디별 마지막 로그인 확인 시각 {uid: 'YYYY-MM-DD HH:MM:SS'} (프로그램을 껐다 켜도 유지 -> 켤 때마다 전부 다시 확인하지 않게)"""
+        if not hasattr(self, 'session_touch'):
+            try:
+                with open(self._session_touch_path(), encoding='utf-8') as f:
+                    self.session_touch = json.load(f)
+            except Exception:
+                self.session_touch = {}
+        return self.session_touch
+
+    def _last_session_touch(self, uid):
+        from datetime import datetime
+        try:
+            return datetime.strptime(self._load_session_touch().get(uid, ''), "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+
+    def _record_session_touch(self, uid):
+        from datetime import datetime
+        self._load_session_touch()[uid] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(self._session_touch_path(), 'w', encoding='utf-8') as f:
+                json.dump(self.session_touch, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.update_log_signal(f"    로그인 확인 기록 저장 실패: {e}")
+
+    def _note_browser_closed(self, uid):
+        """아이디의 크롬을 닫은 시각 기록 -> 다음 다른 아이디는 PRELOGIN_ID_GAP_SEC 뒤에 열기 (이상 감지 방지)"""
+        import time
+        import random
+        self.last_browser_uid = uid
+        self.last_browser_closed_at = time.time()
+        self.next_switch_at = time.time() + random.uniform(*PRELOGIN_ID_GAP_SEC)
+
+    def _switch_wait_left(self):
+        """사전 로그인/세션 유지에서 다음 아이디를 열 수 있을 때까지 남은 초 (0이면 지금 가능)"""
+        import time
+        return max(0, getattr(self, 'next_switch_at', 0) - time.time())
+
+    def _wait_before_upload_switch(self, uid):
+        """업로드에서 다른 아이디로 바꿀 때 직전 아이디를 닫은 뒤 UPLOAD_ID_GAP_SEC만큼 기다림"""
+        import time
+        import random
+        last_uid = getattr(self, 'last_browser_uid', None)
+        if not last_uid or last_uid == uid:
+            return
+        wait = random.uniform(*UPLOAD_ID_GAP_SEC) - (time.time() - getattr(self, 'last_browser_closed_at', 0))
+        if wait <= 0:
+            return
+        self.update_log_signal(f"    [아이디 전환] {last_uid} → {uid}: 이상 감지 방지를 위해 {int(wait)}초 뒤 크롬을 엽니다.")
+        end = time.time() + wait
+        while time.time() < end and self.scheduler_running:
+            time.sleep(min(5, end - time.time()))
 
     def _captcha_lock_path(self):
         return os.path.join(get_data_dir(), "captcha_lock.json")
@@ -2690,6 +2812,7 @@ del "%~f0"
     def on_login_confirmed(self, uid, task=None):
         """로그인 확인 시 사전 로그인 캡챠 표시 해제 + 업로드 캡챠 에러 일정 복구"""
         self._clear_captcha_lock(uid)
+        self._record_session_touch(uid)
         if task is None:
             # 완료된 행에는 캡챠 표시가 없으므로 진행 중인 행을 먼저 찾음
             same_id = [t for t in getattr(self, 'tasks', []) or [] if t.get('id') == uid]
