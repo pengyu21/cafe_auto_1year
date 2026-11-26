@@ -799,7 +799,7 @@ class UpdateDownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-__version__ = "1.58"
+__version__ = "1.59"
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -2303,13 +2303,15 @@ del "%~f0"
 
         batch = getattr(self, 'prelogin_batch', None)
         # 업로드/직접 로그인 등으로 그사이 로그인이 확인된 아이디는 진행 결과를 '로그인 유지'로 채움
-        if batch and batch.get('mode') == 'run':
+        if batch and batch.get('mode') in ('run', 'done'):
             for item in batch['items']:
                 u = item[0]
                 touched, checked = self._last_session_touch(u), self.prelogin_checked.get(u)
                 if (touched and batch['results'].get(u) not in ('ok', 'auto') and u not in self.captcha_ids
                         and (checked is None or touched >= checked)):
                     batch['results'][u] = 'ok'
+                    if batch.get('mode') == 'done':
+                        self._emit_prelogin_state()
         if not pending:
             # 진행하던 묶음이 다 끝났으면 결과를 보여줌
             if batch and batch.get('mode') == 'run':
@@ -2826,6 +2828,11 @@ del "%~f0"
             self.clear_captcha_flag(task or {'id': uid, 'row_index': self.captcha_ids[uid][1],
                                              'current_stage_idx': self.captcha_ids[uid][2]})
         self.restore_captcha_errors(uid)
+        # 사전 로그인 안내 줄에서 이 아이디를 '로그인 유지'로 바꿈 (묶음이 이미 끝난 뒤 직접 로그인해도 '직접 로그인 필요'가 남지 않게)
+        batch = getattr(self, 'prelogin_batch', None)
+        if batch and batch.get('mode') in ('run', 'done') and any(it[0] == uid for it in batch.get('items', [])):
+            batch['results'][uid] = 'ok'
+            self._emit_prelogin_state()
 
     def auto_reset_old_completed(self, tasks):
         """N열(남은 업로드)이 0이고 마지막 업로드 후 AUTO_RESET_DAYS일이 지난 작업을 리셋하고 1~4차 일정을 기입"""
