@@ -744,7 +744,16 @@ class NaverCafeBot:
             if not board_link:
                 print(f"게시판 '{board_name}' 링크를 찾을 수 없습니다. 정확한 이름을 확인해주세요. (상세: {last_err})")
                 return False
-            
+
+            # 같은 이름이 여러 곳에 있으면(최근 글 제목, 즐겨찾기 등) 실제 게시판 주소(menuid)를 가진 메뉴 링크를 고름
+            # (href가 '#'인 링크를 눌러 카페 메인에 그대로 머문 채 글쓰기로 넘어가 '게시판 목록에 머무름'으로 실패하던 문제)
+            board_link = self._pick_board_link(board_name) or board_link
+            start_url = ""
+            try:
+                start_url = self.driver.current_url
+            except Exception:
+                pass
+
             # 4. 화면에 보이도록 스크롤 이동
             try:
                 self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", board_link)
@@ -823,13 +832,99 @@ class NaverCafeBot:
                         return True
                     print(f"게시판 '{board_name}' JS 클릭 실패: {js_err}")
                     return False
-                
+
             time.sleep(2)
-            return True
+            return self._confirm_board_entered(board_name, target_href, start_url)
 
         except Exception as e:
             print(f"게시판 진입 에러: {e}")
             return False
+
+    @staticmethod
+    def _board_menu_id(url):
+        """게시판 주소에서 menuid 추출 (?search.menuid=12 / ?menuid=12 / /menus/12)"""
+        import re
+        if not url:
+            return None
+        m = re.search(r'(?:search\.)?menuid=(\d+)', url, re.I) or re.search(r'/menus/(\d+)', url)
+        return m.group(1) if m else None
+
+    def _pick_board_link(self, board_name):
+        """이름이 같은 링크 중 게시판 주소(menuid)가 있는 링크를 고름. 이름이 정확히 같은 것을 우선"""
+        try:
+            self.driver.switch_to.default_content()
+            cands = self.driver.find_elements(By.XPATH, f"//a[contains(normalize-space(.), '{board_name}')]")
+        except Exception:
+            return None
+        best, best_score = None, -1
+        for a in cands:
+            try:
+                href = a.get_attribute("href") or ""
+                if not self._board_menu_id(href):
+                    continue
+                text = " ".join((a.text or a.get_attribute("textContent") or "").split())
+                score = (2 if text == board_name else 0) + (1 if a.is_displayed() else 0)
+                if score > best_score:
+                    best, best_score = a, score
+            except Exception:
+                continue
+        if best is not None:
+            try:
+                print(f"게시판 링크 선택: {best.get_attribute('href')}")
+            except Exception:
+                pass
+        return best
+
+    def _on_board_page(self, target_href, start_url):
+        """게시판으로 실제로 이동했는지 확인"""
+        try:
+            self.driver.switch_to.default_content()
+            cur = self.driver.current_url
+        except Exception:
+            return False
+        want = self._board_menu_id(target_href)
+        if want:
+            if self._board_menu_id(cur) == want:
+                return True
+            # 구형 레이아웃: 바깥 주소는 그대로이고 cafe_main 프레임 안에서 게시판이 열림
+            try:
+                self.driver.switch_to.frame("cafe_main")
+                inner = self.driver.execute_script("return location.href;") or ""
+                self.driver.switch_to.default_content()
+                if self._board_menu_id(inner) == want:
+                    return True
+            except Exception:
+                try:
+                    self.driver.switch_to.default_content()
+                except Exception:
+                    pass
+            return False
+        # menuid를 모르는 링크면 주소가 바뀌었는지만 확인 ('#'만 붙은 것은 이동 아님)
+        return bool(cur) and cur.rstrip('#') != (start_url or "").rstrip('#')
+
+    def _confirm_board_entered(self, board_name, target_href, start_url):
+        """클릭 뒤 게시판으로 이동했는지 확인하고, 안 됐으면 게시판 주소로 직접 이동"""
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            if self._on_board_page(target_href, start_url):
+                return True
+            time.sleep(1)
+        if target_href and self._board_menu_id(target_href):
+            print(f"게시판 '{board_name}' 클릭 후 화면이 바뀌지 않아 게시판 주소로 직접 이동합니다: {target_href}")
+            try:
+                self.driver.switch_to.default_content()
+                self.driver.get(target_href)
+                time.sleep(3)
+                if self._on_board_page(target_href, start_url):
+                    return True
+            except Exception as e:
+                print(f"게시판 주소 직접 이동 실패: {e}")
+        try:
+            cur = self.driver.current_url
+        except Exception:
+            cur = ""
+        print(f"게시판 '{board_name}'으로 이동하지 못했습니다. (현재 주소: {cur}, 링크: {target_href})")
+        return False
 
     def delete_all_my_posts(self):
         """'내가 쓴 게시글'로 이동하여 전체 선택 후 삭제"""
